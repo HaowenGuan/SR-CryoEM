@@ -123,7 +123,6 @@ class ConvNextBlock(nn.Module):
         if exists(self.mlp) and exists(time_emb):
             assert exists(time_emb), "time embedding must be passed in"
             condition = self.mlp(time_emb)
-            print(condition)
             h = h + rearrange(condition, "b c -> b c 1 1 1")
 
         h = self.net(h)
@@ -396,10 +395,10 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
 
     return loss
 
-from datasets import load_dataset
-import numpy as np
 
+import numpy as np
 # load dataset from the hub
+# from datasets import load_dataset
 #dataset = load_dataset("Datatang/3D_Living_Face_Anti_Spoofing_Data")
 image_size = 4
 channels = 1
@@ -478,67 +477,66 @@ def sample(model, image_size, batch_size=16, channels=3):
     return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size))
 
 
+if __name__ == "__main__":
+    from pathlib import Path
 
-from pathlib import Path
+    def num_to_groups(num, divisor):
+        groups = num // divisor
+        remainder = num % divisor
+        arr = [divisor] * groups
+        if remainder > 0:
+            arr.append(remainder)
+        return arr
 
-def num_to_groups(num, divisor):
-    groups = num // divisor
-    remainder = num % divisor
-    arr = [divisor] * groups
-    if remainder > 0:
-        arr.append(remainder)
-    return arr
+    results_folder = Path("./results")
+    results_folder.mkdir(exist_ok = True)
+    save_and_sample_every = 1000
 
-results_folder = Path("./results")
-results_folder.mkdir(exist_ok = True)
-save_and_sample_every = 1000
+    from torch.optim import Adam
 
-from torch.optim import Adam
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(str(image_size))
+    print(str(channels))
 
-print(str(image_size))
-print(str(channels))
+    model = Unet(
+        dim=image_size,
+        channels=channels,
+        dim_mults=(1, 2, 4,)
+    )
+    model.to(device)
 
-model = Unet(
-    dim=image_size,
-    channels=channels,
-    dim_mults=(1, 2, 4,)
-)
-model.to(device)
+    optimizer = Adam(model.parameters(), lr=1e-3)
 
-optimizer = Adam(model.parameters(), lr=1e-3)
+    from torchvision.utils import save_image
 
-from torchvision.utils import save_image
+    epochs = 5
 
-epochs = 5
+    for epoch in range(epochs):
+        for step, batch in enumerate(dataloader):
+          optimizer.zero_grad()
 
-for epoch in range(epochs):
-    for step, batch in enumerate(dataloader):
-      optimizer.zero_grad()
+          batch_size = len(batch) #batch.shape[0]
+          print(str(batch_size))
+          print(str(batch.shape))
+          batch = batch.to(device)
 
-      batch_size = len(batch) #batch.shape[0]
-      print(str(batch_size))
-      print(str(batch.shape))
-      batch = batch.to(device)
+          # Algorithm 1 line 3: sample t uniformally for every example in the batch
+          t = torch.randint(0, timesteps, (batch_size,), device=device).long()
 
-      # Algorithm 1 line 3: sample t uniformally for every example in the batch
-      t = torch.randint(0, timesteps, (batch_size,), device=device).long()
+          loss = p_losses(model, batch.float(), t, loss_type="huber")
 
-      loss = p_losses(model, batch.float(), t, loss_type="huber")
+          if step % 10 == 0:
+            print("Loss:", loss.item())
 
-      if step % 10 == 0:
-        print("Loss:", loss.item())
+          loss.backward()
+          optimizer.step()
 
-      loss.backward()
-      optimizer.step()
-
-      # save generated images
-      if step != 0 and step % save_and_sample_every == 0:
-        milestone = step // save_and_sample_every
-        batches = num_to_groups(4, batch_size)
-        all_images_list = list(map(lambda n: sample(model, batch_size=n, channels=channels), batches))
-        all_images = torch.cat(all_images_list, dim=0)
-        all_images = (all_images + 1) * 0.5
-        save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow = 6)
-
+          # save generated images
+          if step != 0 and step % save_and_sample_every == 0:
+            milestone = step // save_and_sample_every
+            batches = num_to_groups(4, batch_size)
+            all_images_list = list(map(lambda n: sample(model, batch_size=n, channels=channels), batches))
+            all_images = torch.cat(all_images_list, dim=0)
+            all_images = (all_images + 1) * 0.5
+            save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow = 6)
