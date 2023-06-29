@@ -71,12 +71,11 @@ class Block(nn.Module):
 class ResnetBlock(nn.Module):
     """https://arxiv.org/abs/1512.03385"""
 
-    def __init__(self, dim, dim_out, *, time_emb_dim=None, groups=8):
+    def __init__(self, dim, dim_out, *, emb_dim=None, groups=8):
         super().__init__()
+        assert emb_dim, "embedding size be passed in"
         self.mlp = (
-            nn.Sequential(nn.SiLU(), nn.Linear(time_emb_dim, dim_out))
-            if exists(time_emb_dim)
-            else None
+            nn.Sequential(nn.GELU(), nn.Linear(emb_dim, dim))
         )
 
         self.block1 = Block(dim, dim_out, groups=groups)
@@ -97,13 +96,11 @@ class ResnetBlock(nn.Module):
 class ConvNextBlock(nn.Module):
     """https://arxiv.org/abs/2201.03545"""
 
-    def __init__(self, dim, dim_out, *, time_emb_dim=None, mult=2, norm=True):
+    def __init__(self, dim, dim_out, *, emb_dim=None, mult=2, norm=True):
         super().__init__()
-        self.mlp = (
-            nn.Sequential(nn.GELU(), nn.Linear(time_emb_dim, dim))
-            if exists(time_emb_dim)
-            else None
-        )
+        assert exists(emb_dim), "embedding size must be passed in"
+        self.t_mlp = (nn.Sequential(nn.GELU(), nn.Linear(emb_dim, dim)))
+        self.in_A_mlp = (nn.Sequential(nn.GELU(), nn.Linear(emb_dim, dim)))
 
         self.ds_conv = nn.Conv3d(dim, dim, 7, padding=3, groups=dim)
 
@@ -117,13 +114,13 @@ class ConvNextBlock(nn.Module):
 
         self.res_conv = nn.Conv3d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
 
-    def forward(self, x, time_emb=None):
+    def forward(self, x, time_emb=None, input_emb=None):
         h = self.ds_conv(x)
 
-        if exists(self.mlp) and exists(time_emb):
-            assert exists(time_emb), "time embedding must be passed in"
-            condition = self.mlp(time_emb)
-            h = h + rearrange(condition, "b c -> b c 1 1 1")
+        assert exists(time_emb) and exists(input_emb), "time embedding and input embedding must be passed in"
+        t = rearrange(self.t_mlp(time_emb), "b c -> b c 1 1 1")
+        input = rearrange(self.in_a_mlp(input_emb), "b c -> b c 1 1 1")
+        h = h + t + input
 
         h = self.net(h)
         return h + self.res_conv(x)
@@ -153,6 +150,7 @@ class Attention(nn.Module):
         out = einsum("b h i j, b h d j -> b h i d", attn, v)
         out = rearrange(out, "b h (x y z) d -> b (h d) x y z", x=h, y=w, z=p)
         return self.to_out(out)
+
 
 class LinearAttention(nn.Module):
     def __init__(self, dim, heads=4, dim_head=32):
@@ -223,18 +221,22 @@ class Unet(nn.Module):
         else:
             block_klass = partial(ResnetBlock, groups=resnet_block_groups)
 
-        # time embeddings
-        if with_time_emb:
+        def generate_embedding(dim):
             time_dim = dim * 4
-            self.time_mlp = nn.Sequential(
+            return  nn.Sequential(
                 SinusoidalPositionEmbeddings(dim),
                 nn.Linear(dim, time_dim),
                 nn.GELU(),
                 nn.Linear(time_dim, time_dim),
             )
-        else:
-            time_dim = None
-            self.time_mlp = None
+            
+        # time embeddings
+        self.time_mlp = generate_embedding(dim)   
+        # input resolution embeddings
+        self.input_A_mlp = generate_embedding(dim)
+        # output resolution embeddings
+        self.output_A_mlp = generate_embedding(dim)
+        embedding_dim = dim * 4
 
         # layers
         self.downs = nn.ModuleList([])
@@ -247,8 +249,8 @@ class Unet(nn.Module):
             self.downs.append(
                 nn.ModuleList(
                     [
-                        block_klass(dim_in, dim_out, time_emb_dim=time_dim),
-                        block_klass(dim_out, dim_out, time_emb_dim=time_dim),
+                        block_klass(dim_in, dim_out, emb_dim=embedding_dim),
+                        block_klass(dim_out, dim_out, emb_dim=embedding_dim),
                         Residual(PreNorm(dim_out, LinearAttention(dim_out))),
                         Downsample(dim_out) if not is_last else nn.Identity(),
                     ]
@@ -256,9 +258,9 @@ class Unet(nn.Module):
             )
 
         mid_dim = dims[-1]
-        self.mid_block1 = block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        self.mid_block1 = block_klass(mid_dim, mid_dim, emb_dim=embedding_dim)
         self.mid_attn = Residual(PreNorm(mid_dim, Attention(mid_dim)))
-        self.mid_block2 = block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        self.mid_block2 = block_klass(mid_dim, mid_dim, emb_dim=embedding_dim)
 
         for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
             is_last = ind >= (num_resolutions - 1)
@@ -266,8 +268,8 @@ class Unet(nn.Module):
             self.ups.append(
                 nn.ModuleList(
                     [
-                        block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
-                        block_klass(dim_in, dim_in, time_emb_dim=time_dim),
+                        block_klass(dim_out * 2, dim_in, emb_dim=embedding_dim),
+                        block_klass(dim_in, dim_in, emb_dim=embedding_dim),
                         Residual(PreNorm(dim_in, LinearAttention(dim_in))),
                         Upsample(dim_in) if not is_last else nn.Identity(),
                     ]
@@ -279,31 +281,32 @@ class Unet(nn.Module):
             block_klass(dim, dim), nn.Conv3d(dim, out_dim, 1)
         )
 
-    def forward(self, x, time):
+    def forward(self, x, time, input):
         x = self.init_conv(x)
 
-        t = self.time_mlp(time) if exists(self.time_mlp) else None
+        t = self.time_mlp(time)
+        i = self.input_A_mlp(input)
 
         h = []
 
         # downsample
         for block1, block2, attn, downsample in self.downs:
-            x = block1(x, t)
-            x = block2(x, t)
+            x = block1(x, t, i)
+            x = block2(x, t, i)
             x = attn(x)
             h.append(x)
             x = downsample(x)
 
         # bottleneck
-        x = self.mid_block1(x, t)
+        x = self.mid_block1(x, t, i)
         x = self.mid_attn(x)
-        x = self.mid_block2(x, t)
+        x = self.mid_block2(x, t, i)
 
         # upsample
         for block1, block2, attn, upsample in self.ups:
             x = torch.cat((x, h.pop()), dim=1)
-            x = block1(x, t)
-            x = block2(x, t)
+            x = block1(x, t, i)
+            x = block2(x, t, i)
             x = attn(x)
             x = upsample(x)
 
