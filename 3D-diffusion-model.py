@@ -2,7 +2,6 @@ import math
 from inspect import isfunction
 from functools import partial
 
-
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 from einops import rearrange
@@ -11,13 +10,16 @@ import torch
 from torch import nn, einsum
 import torch.nn.functional as F
 
+
 def exists(x):
     return x is not None
+
 
 def default(val, d):
     if exists(val):
         return val
     return d() if isfunction(d) else d
+
 
 class Residual(nn.Module):
     def __init__(self, fn):
@@ -27,8 +29,10 @@ class Residual(nn.Module):
     def forward(self, x, *args, **kwargs):
         return self.fn(x, *args, **kwargs) + x
 
+
 def Upsample(dim):
     return nn.ConvTranspose3d(dim, dim, 4, 2, 1)
+
 
 def Downsample(dim):
     return nn.Conv3d(dim, dim, 4, 2, 1)
@@ -98,9 +102,9 @@ class ConvNextBlock(nn.Module):
 
     def __init__(self, dim, dim_out, *, emb_dim=None, mult=2, norm=True):
         super().__init__()
-        assert exists(emb_dim), "embedding size must be passed in"
-        self.t_mlp = (nn.Sequential(nn.GELU(), nn.Linear(emb_dim, dim)))
-        self.in_A_mlp = (nn.Sequential(nn.GELU(), nn.Linear(emb_dim, dim)))
+
+        self.t_mlp = (nn.Sequential(nn.GELU(), nn.Linear(emb_dim, dim)) if emb_dim else None)
+        self.in_A_mlp = (nn.Sequential(nn.GELU(), nn.Linear(emb_dim, dim)) if emb_dim else None)
 
         self.ds_conv = nn.Conv3d(dim, dim, 7, padding=3, groups=dim)
 
@@ -117,10 +121,11 @@ class ConvNextBlock(nn.Module):
     def forward(self, x, time_emb=None, input_emb=None):
         h = self.ds_conv(x)
 
-        assert exists(time_emb) and exists(input_emb), "time embedding and input embedding must be passed in"
-        t = rearrange(self.t_mlp(time_emb), "b c -> b c 1 1 1")
-        input = rearrange(self.in_a_mlp(input_emb), "b c -> b c 1 1 1")
-        h = h + t + input
+        if exists(self.t_mlp) and exists(self.in_A_mlp):
+            assert exists(time_emb) and exists(input_emb), "time embedding and input embedding must be passed in"
+            t = rearrange(self.t_mlp(time_emb), "b c -> b c 1 1 1")
+            i = rearrange(self.in_A_mlp(input_emb), "b c -> b c 1 1 1")
+            h = h + t + i
 
         h = self.net(h)
         return h + self.res_conv(x)
@@ -129,7 +134,7 @@ class ConvNextBlock(nn.Module):
 class Attention(nn.Module):
     def __init__(self, dim, heads=4, dim_head=32):
         super().__init__()
-        self.scale = dim_head**-0.5
+        self.scale = dim_head ** -0.5
         self.heads = heads
         hidden_dim = dim_head * heads
         self.to_qkv = nn.Conv3d(dim, hidden_dim * 3, 1, bias=False)
@@ -155,7 +160,7 @@ class Attention(nn.Module):
 class LinearAttention(nn.Module):
     def __init__(self, dim, heads=4, dim_head=32):
         super().__init__()
-        self.scale = dim_head**-0.5
+        self.scale = dim_head ** -0.5
         self.heads = heads
         hidden_dim = dim_head * heads
         self.to_qkv = nn.Conv3d(dim, hidden_dim * 3, 1, bias=False)
@@ -211,7 +216,7 @@ class Unet(nn.Module):
         self.channels = channels
 
         init_dim = default(init_dim, dim // 3 * 2)
-        self.init_conv = nn.Conv3d(channels, init_dim, 7, padding=3)
+        self.init_conv = nn.Conv3d(channels * 2, init_dim, 7, padding=3)
 
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
@@ -223,19 +228,19 @@ class Unet(nn.Module):
 
         def generate_embedding(dim):
             time_dim = dim * 4
-            return  nn.Sequential(
+            return nn.Sequential(
                 SinusoidalPositionEmbeddings(dim),
                 nn.Linear(dim, time_dim),
                 nn.GELU(),
                 nn.Linear(time_dim, time_dim),
             )
-            
+
         # time embeddings
-        self.time_mlp = generate_embedding(dim)   
+        self.time_mlp = generate_embedding(dim)
         # input resolution embeddings
         self.input_A_mlp = generate_embedding(dim)
         # output resolution embeddings
-        self.output_A_mlp = generate_embedding(dim)
+        # self.output_A_mlp = generate_embedding(dim)
         embedding_dim = dim * 4
 
         # layers
@@ -289,26 +294,26 @@ class Unet(nn.Module):
 
         h = []
 
-        # downsample
-        for block1, block2, attn, downsample in self.downs:
+        # down sample
+        for block1, block2, attn, downSample in self.downs:
             x = block1(x, t, i)
             x = block2(x, t, i)
             x = attn(x)
             h.append(x)
-            x = downsample(x)
+            x = downSample(x)
 
         # bottleneck
         x = self.mid_block1(x, t, i)
         x = self.mid_attn(x)
         x = self.mid_block2(x, t, i)
 
-        # upsample
-        for block1, block2, attn, upsample in self.ups:
+        # up sample
+        for block1, block2, attn, upSample in self.ups:
             x = torch.cat((x, h.pop()), dim=1)
             x = block1(x, t, i)
             x = block2(x, t, i)
             x = attn(x)
-            x = upsample(x)
+            x = upSample(x)
 
         return self.final_conv(x)
 
@@ -324,15 +329,18 @@ def cosine_beta_schedule(timesteps, s=0.008):
     betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
     return torch.clip(betas, 0.0001, 0.9999)
 
+
 def linear_beta_schedule(timesteps):
     beta_start = 0.0001
     beta_end = 0.02
     return torch.linspace(beta_start, beta_end, timesteps)
 
+
 def quadratic_beta_schedule(timesteps):
     beta_start = 0.0001
     beta_end = 0.02
-    return torch.linspace(beta_start**0.5, beta_end**0.5, timesteps) ** 2
+    return torch.linspace(beta_start ** 0.5, beta_end ** 0.5, timesteps) ** 2
+
 
 def sigmoid_beta_schedule(timesteps):
     beta_start = 0.0001
@@ -359,33 +367,37 @@ sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
 # calculations for posterior q(x_{t-1} | x_t, x_0)
 posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
+
 def extract(a, t, x_shape):
     batch_size = t.shape[0]
     out = a.gather(-1, t.cpu())
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
 
+
 from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage, CenterCrop, Resize
 
 import numpy as np
 
+
 # forward diffusion
-def q_sample(x_start, t, noise=None):
+def q_sample(y, t, noise=None):
     if noise is None:
-        noise = torch.randn_like(x_start)
+        noise = torch.randn_like(y)
 
-    sqrt_alphas_cumprod_t = extract(sqrt_alphas_cumprod, t, x_start.shape)
+    sqrt_alphas_cumprod_t = extract(sqrt_alphas_cumprod, t, y.shape)
     sqrt_one_minus_alphas_cumprod_t = extract(
-        sqrt_one_minus_alphas_cumprod, t, x_start.shape
+        sqrt_one_minus_alphas_cumprod, t, y.shape
     )
+    return sqrt_alphas_cumprod_t * y + sqrt_one_minus_alphas_cumprod_t * noise
 
-    return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
-def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
+def p_losses(denoise_model, x, y, t, i, noise=None, loss_type="l1"):
     if noise is None:
-        noise = torch.randn_like(x_start)
+        noise = torch.randn_like(y)
 
-    x_noisy = q_sample(x_start=x_start, t=t, noise=noise)
-    predicted_noise = denoise_model(x_noisy, t)
+    y_noisy = q_sample(y=y, t=t, noise=noise)
+    x_y_noisy = torch.cat((x, y_noisy), dim=1)
+    predicted_noise = denoise_model(x_y_noisy, t, i)
 
     if loss_type == 'l1':
         loss = F.l1_loss(noise, predicted_noise)
@@ -400,38 +412,41 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
 
 
 import numpy as np
+
 # load dataset from the hub
 # from datasets import load_dataset
-#dataset = load_dataset("Datatang/3D_Living_Face_Anti_Spoofing_Data")
-image_size = 4
+# dataset = load_dataset("Datatang/3D_Living_Face_Anti_Spoofing_Data")
+image_size = 64
 channels = 1
-batch_size = 128
+batch_size = 16
 
-dataset=[0]*batch_size*2
+dataset = [0] * batch_size * 2
 for i in range(len(dataset)):
-  dataset[i] = np.random.rand(1, image_size, image_size, image_size)
+    dataset[i] = np.random.rand(1, image_size, image_size, image_size)
 
 from torchvision import transforms
 from torch.utils.data import DataLoader
 
 # define image transformations (e.g. using torchvision)
 transform = Compose([
-            #transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Lambda(lambda t: (t * 2) - 1)
+    # transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Lambda(lambda t: (t * 2) - 1)
 ])
+
 
 # define function
 def transforms(examples):
-   examples["pixel_values"] = [transform(image.convert("L")) for image in examples["image"]]
-   del examples["image"]
+    examples["pixel_values"] = [transform(image.convert("L")) for image in examples["image"]]
+    del examples["image"]
 
-   return examples
+    return examples
 
-#transformed_dataset = dataset.with_transform(transforms).remove_columns("label")
+
+# transformed_dataset = dataset.with_transform(transforms).remove_columns("label")
 
 # create dataloader
-#dataloader = DataLoader(transformed_dataset["train"], batch_size=batch_size, shuffle=True)
+# dataloader = DataLoader(transformed_dataset["train"], batch_size=batch_size, shuffle=True)
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 
@@ -483,6 +498,7 @@ def sample(model, image_size, batch_size=16, channels=3):
 if __name__ == "__main__":
     from pathlib import Path
 
+
     def num_to_groups(num, divisor):
         groups = num // divisor
         remainder = num % divisor
@@ -491,16 +507,17 @@ if __name__ == "__main__":
             arr.append(remainder)
         return arr
 
+
     results_folder = Path("./results")
-    results_folder.mkdir(exist_ok = True)
+    results_folder.mkdir(exist_ok=True)
     save_and_sample_every = 1000
 
     from torch.optim import Adam
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print(str(image_size))
-    print(str(channels))
+    print("image_size", str(image_size))
+    print("channels", str(channels))
 
     model = Unet(
         dim=image_size,
@@ -509,37 +526,60 @@ if __name__ == "__main__":
     )
     model.to(device)
 
-    optimizer = Adam(model.parameters(), lr=1e-3)
+    optimizer = Adam(model.parameters(), lr=1e-5)
 
     from torchvision.utils import save_image
 
-    epochs = 5
+    epochs = 20
+
+    from prepare_data import generate_density_map, CryoEMDataset
+    from util.map_splitter import split_map, reconstruct_map
+    # ---------------------
+    image_size = 64
+    channels = 1
+    batch_size = 16
+    pdb = '/data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb'
+    in_map, out_map = generate_density_map(pdb, 3, 6, 1)
+    in_map = split_map(in_map.data)
+    out_map = split_map(out_map.data)
+    in_label = torch.full((len(in_map),), 6.0)
+    out_label = torch.full((len(in_map),), 3.0)
+    dataset = CryoEMDataset(in_map, out_map, in_label, out_label)
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
+    # ---------------------
 
     for epoch in range(epochs):
         for step, batch in enumerate(dataloader):
-          optimizer.zero_grad()
+            optimizer.zero_grad()
 
-          batch_size = len(batch) #batch.shape[0]
-          print(str(batch_size))
-          print(str(batch.shape))
-          batch = batch.to(device)
+            # batch_size = len(batch)  # batch.shape[0]
+            # batch = batch.to(device)
+            # print(batch.shape)
+            # exit(0)
+            batch_size = len(batch[0])
+            in_batch = batch[0].to(device)
+            out_batch = batch[2].to(device)
+            in_label = batch[1].to(device)
+            # exit(0)
 
-          # Algorithm 1 line 3: sample t uniformally for every example in the batch
-          t = torch.randint(0, timesteps, (batch_size,), device=device).long()
+            # Algorithm 1 line 3: sample t uniformally for every example in the batch
+            t = torch.randint(0, timesteps, (batch_size,), device=device).long()
+            # i = torch.full((batch_size,), 5.0, device=device)
 
-          loss = p_losses(model, batch.float(), t, loss_type="huber")
+            loss = p_losses(model, in_batch.float(), out_batch.float(), t, in_label, loss_type="huber")
 
-          if step % 10 == 0:
-            print("Loss:", loss.item())
+            if step % 10 == 0:
+                print("Loss:", loss.item())
 
-          loss.backward()
-          optimizer.step()
+            loss.backward()
+            optimizer.step()
+            # print(model.input_A_mlp[1].weight)
 
-          # save generated images
-          if step != 0 and step % save_and_sample_every == 0:
-            milestone = step // save_and_sample_every
-            batches = num_to_groups(4, batch_size)
-            all_images_list = list(map(lambda n: sample(model, batch_size=n, channels=channels), batches))
-            all_images = torch.cat(all_images_list, dim=0)
-            all_images = (all_images + 1) * 0.5
-            save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow = 6)
+            # save generated images
+            if step != 0 and step % save_and_sample_every == 0:
+                milestone = step // save_and_sample_every
+                batches = num_to_groups(4, batch_size)
+                all_images_list = list(map(lambda n: sample(model, batch_size=n, channels=channels), batches))
+                all_images = torch.cat(all_images_list, dim=0)
+                all_images = (all_images + 1) * 0.5
+                save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)

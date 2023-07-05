@@ -13,6 +13,60 @@ from pathlib import Path
 import lmdb
 import numpy as np
 import time
+import tempfile
+import shutil
+from util.density_map import DensityMap
+from torch.utils.data import Dataset
+
+
+class CryoEMDataset(Dataset):
+    def __init__(self, in_map, out_map, in_label, out_label):
+        self.in_map = in_map
+        self.out_map = out_map
+        self.in_label = in_label
+        self.out_label = out_label
+
+    def __len__(self):
+        assert len(self.in_map) == len(self.in_label) == len(self.out_map) == len(self.out_label)
+        return len(self.in_map)
+
+    def __getitem__(self, idx):
+        in_map = self.in_map[idx]
+        out_map = self.out_map[idx]
+        in_label = self.in_label[idx]
+        out_label = self.out_label[idx]
+        return in_map, in_label, out_map, out_label
+
+
+def generate_density_map(solved_structure_path: str, in_res: float, out_res: float, grid_size: float):
+    """
+    Generate density map from solved structure
+    :param solved_structure_path: The path to the solved structure
+    :param in_res: The resolution of the input density map
+    :param out_res: The resolution of the output density map
+    :param grid_size: The grid size of the density map in Angstrom
+    :return: The input and output density map
+    """
+    assert in_res < out_res, 'in_A must be smaller than out_A'
+    # Chimera molmap
+    tmp_dir = tempfile.mkdtemp(prefix='deeptracer_preprocessing')
+    tmp_in_map_path = os.path.join(tmp_dir, 'in.mrc')
+    tmp_out_map_path = os.path.join(tmp_dir, 'out.mrc')
+    Chimera.run(tmp_dir, [
+        'open %s' % solved_structure_path,
+        'molmap #0 %s gridSpacing %s' % (in_res, grid_size),
+        'volume #0 save %s' % tmp_in_map_path,
+    ])
+    Chimera.run(tmp_dir, [
+        'open %s' % solved_structure_path,
+        'open %s' % tmp_in_map_path,
+        'molmap #0 %s onGrid #1' % out_res,
+        'volume #2 save %s' % tmp_out_map_path,
+    ])
+    in_map = DensityMap.open(tmp_in_map_path)
+    out_map = DensityMap.open(tmp_out_map_path)
+    shutil.rmtree(tmp_dir)
+    return in_map, out_map
 
 
 def resize_and_convert(img, size, resample):

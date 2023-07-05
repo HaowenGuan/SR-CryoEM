@@ -24,6 +24,8 @@ class Chimera:
                              stderr=subprocess.PIPE)
         lines = []
 
+        for line in p.stderr:
+            print(line.decode('utf-8').rstrip())
         for line in p.stdout:
             lines.append(line)
         # Remove chimera script from file system
@@ -38,7 +40,7 @@ class Chimera:
 
         # If CHIMERA environment variable isn't set check if chimera binary can
         # be found in default locations
-        for possible_location in ['/bin/chimera', '/usr/bin/chimera', '/usr/local/bin/chimera']:
+        for possible_location in ['/bin/chimera', '/usr/bin/chimera', '/usr/local/bin/chimera', '/usr/local/bin/chimera/bin/chimera']:
             if os.path.isfile(possible_location):
                 return possible_location
 
