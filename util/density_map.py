@@ -137,7 +137,7 @@ class DensityMap:
             max(0, min(self.shape[2] - 1, int(round((x - self.origin.x) / self.voxel_size.x)) + self.nxstart))
         )
 
-    def save(self, filename: str, compress: bool = False):
+    def save(self, filename: str):
         """
         Saves density map as MRC file to given path
 

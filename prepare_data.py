@@ -47,21 +47,21 @@ def generate_density_map(solved_structure_path: str, in_res: float, out_res: flo
     :param grid_size: The grid size of the density map in Angstrom
     :return: The input and output density map
     """
-    assert in_res < out_res, 'in_A must be smaller than out_A'
+    assert in_res > out_res, 'Input resolution must be larger than output resolution'
     # Chimera molmap
     tmp_dir = tempfile.mkdtemp(prefix='deeptracer_preprocessing')
     tmp_in_map_path = os.path.join(tmp_dir, 'in.mrc')
     tmp_out_map_path = os.path.join(tmp_dir, 'out.mrc')
     Chimera.run(tmp_dir, [
         'open %s' % solved_structure_path,
-        'molmap #0 %s gridSpacing %s' % (in_res, grid_size),
-        'volume #0 save %s' % tmp_in_map_path,
+        'molmap #0 %s gridSpacing %s' % (out_res, grid_size),
+        'volume #0 save %s' % tmp_out_map_path,
     ])
     Chimera.run(tmp_dir, [
         'open %s' % solved_structure_path,
-        'open %s' % tmp_in_map_path,
-        'molmap #0 %s onGrid #1' % out_res,
-        'volume #2 save %s' % tmp_out_map_path,
+        'open %s' % tmp_out_map_path,
+        'molmap #0 %s onGrid #1' % in_res,
+        'volume #2 save %s' % tmp_in_map_path,
     ])
     in_map = DensityMap.open(tmp_in_map_path)
     out_map = DensityMap.open(tmp_out_map_path)

@@ -9,6 +9,15 @@ from einops import rearrange
 import torch
 from torch import nn, einsum
 import torch.nn.functional as F
+import numpy as np
+from torch.utils.data import DataLoader
+from torchvision.utils import save_image
+from torch.optim import Adam
+from prepare_data import generate_density_map, CryoEMDataset
+from util.map_splitter import split_map, reconstruct_map
+from pathlib import Path
+from util.density_map import DensityMap
+
 
 
 def exists(x):
@@ -105,6 +114,7 @@ class ConvNextBlock(nn.Module):
 
         self.t_mlp = (nn.Sequential(nn.GELU(), nn.Linear(emb_dim, dim)) if emb_dim else None)
         self.in_A_mlp = (nn.Sequential(nn.GELU(), nn.Linear(emb_dim, dim)) if emb_dim else None)
+        self.out_A_mlp = (nn.Sequential(nn.GELU(), nn.Linear(emb_dim, dim)) if emb_dim else None)
 
         self.ds_conv = nn.Conv3d(dim, dim, 7, padding=3, groups=dim)
 
@@ -118,14 +128,15 @@ class ConvNextBlock(nn.Module):
 
         self.res_conv = nn.Conv3d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
 
-    def forward(self, x, time_emb=None, input_emb=None):
+    def forward(self, x, time_emb=None, input_emb=None, output_emb=None):
         h = self.ds_conv(x)
 
-        if exists(self.t_mlp) and exists(self.in_A_mlp):
-            assert exists(time_emb) and exists(input_emb), "time embedding and input embedding must be passed in"
+        if exists(self.t_mlp) and exists(self.in_A_mlp) and exists(self.out_A_mlp):
+            assert exists(time_emb) and exists(input_emb) and exists(output_emb), "3 embeddings must be passed in"
             t = rearrange(self.t_mlp(time_emb), "b c -> b c 1 1 1")
             i = rearrange(self.in_A_mlp(input_emb), "b c -> b c 1 1 1")
-            h = h + t + i
+            o = rearrange(self.out_A_mlp(output_emb), "b c -> b c 1 1 1")
+            h = h + t + i + o
 
         h = self.net(h)
         return h + self.res_conv(x)
@@ -235,13 +246,13 @@ class Unet(nn.Module):
                 nn.Linear(time_dim, time_dim),
             )
 
+        embedding_dim = dim * 4
         # time embeddings
         self.time_mlp = generate_embedding(dim)
         # input resolution embeddings
         self.input_A_mlp = generate_embedding(dim)
         # output resolution embeddings
-        # self.output_A_mlp = generate_embedding(dim)
-        embedding_dim = dim * 4
+        self.output_A_mlp = generate_embedding(dim)
 
         # layers
         self.downs = nn.ModuleList([])
@@ -286,32 +297,33 @@ class Unet(nn.Module):
             block_klass(dim, dim), nn.Conv3d(dim, out_dim, 1)
         )
 
-    def forward(self, x, time, input):
+    def forward(self, x, time, in_resolution, out_resolution):
         x = self.init_conv(x)
 
         t = self.time_mlp(time)
-        i = self.input_A_mlp(input)
+        i = self.input_A_mlp(in_resolution)
+        o = self.output_A_mlp(out_resolution)
 
         h = []
 
         # down sample
         for block1, block2, attn, downSample in self.downs:
-            x = block1(x, t, i)
-            x = block2(x, t, i)
+            x = block1(x, t, i, o)
+            x = block2(x, t, i, o)
             x = attn(x)
             h.append(x)
             x = downSample(x)
 
         # bottleneck
-        x = self.mid_block1(x, t, i)
+        x = self.mid_block1(x, t, i, o)
         x = self.mid_attn(x)
-        x = self.mid_block2(x, t, i)
+        x = self.mid_block2(x, t, i, o)
 
         # up sample
         for block1, block2, attn, upSample in self.ups:
             x = torch.cat((x, h.pop()), dim=1)
-            x = block1(x, t, i)
-            x = block2(x, t, i)
+            x = block1(x, t, i, o)
+            x = block2(x, t, i, o)
             x = attn(x)
             x = upSample(x)
 
@@ -373,13 +385,7 @@ def extract(a, t, x_shape):
     out = a.gather(-1, t.cpu())
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
 
-
-from torchvision.transforms import Compose, ToTensor, Lambda, ToPILImage, CenterCrop, Resize
-
-import numpy as np
-
-
-# forward diffusion
+# forward diffusion O(1)
 def q_sample(y, t, noise=None):
     if noise is None:
         noise = torch.randn_like(y)
@@ -391,13 +397,13 @@ def q_sample(y, t, noise=None):
     return sqrt_alphas_cumprod_t * y + sqrt_one_minus_alphas_cumprod_t * noise
 
 
-def p_losses(denoise_model, x, y, t, i, noise=None, loss_type="l1"):
+def p_losses(model, x, y, t, in_resolution, out_resolution, noise=None, loss_type="l1"):
     if noise is None:
         noise = torch.randn_like(y)
 
     y_noisy = q_sample(y=y, t=t, noise=noise)
     x_y_noisy = torch.cat((x, y_noisy), dim=1)
-    predicted_noise = denoise_model(x_y_noisy, t, i)
+    predicted_noise = model(x_y_noisy, t, in_resolution, out_resolution)
 
     if loss_type == 'l1':
         loss = F.l1_loss(noise, predicted_noise)
@@ -411,175 +417,184 @@ def p_losses(denoise_model, x, y, t, i, noise=None, loss_type="l1"):
     return loss
 
 
-import numpy as np
-
-# load dataset from the hub
-# from datasets import load_dataset
-# dataset = load_dataset("Datatang/3D_Living_Face_Anti_Spoofing_Data")
-image_size = 64
-channels = 1
-batch_size = 16
-
-dataset = [0] * batch_size * 2
-for i in range(len(dataset)):
-    dataset[i] = np.random.rand(1, image_size, image_size, image_size)
-
-from torchvision import transforms
-from torch.utils.data import DataLoader
-
-# define image transformations (e.g. using torchvision)
-transform = Compose([
-    # transforms.RandomHorizontalFlip(),
-    transforms.ToTensor(),
-    transforms.Lambda(lambda t: (t * 2) - 1)
-])
-
-
-# define function
-def transforms(examples):
-    examples["pixel_values"] = [transform(image.convert("L")) for image in examples["image"]]
-    del examples["image"]
-
-    return examples
-
-
-# transformed_dataset = dataset.with_transform(transforms).remove_columns("label")
-
-# create dataloader
-# dataloader = DataLoader(transformed_dataset["train"], batch_size=batch_size, shuffle=True)
-dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-
-@torch.no_grad()
-def p_sample(model, x, t, t_index):
-    betas_t = extract(betas, t, x.shape)
-    sqrt_one_minus_alphas_cumprod_t = extract(
-        sqrt_one_minus_alphas_cumprod, t, x.shape
-    )
-    sqrt_recip_alphas_t = extract(sqrt_recip_alphas, t, x.shape)
-
-    # Equation 11 in the paper
-    # Use our model (noise predictor) to predict the mean
-    model_mean = sqrt_recip_alphas_t * (
-            x - betas_t * model(x, t) / sqrt_one_minus_alphas_cumprod_t
-    )
-
-    if t_index == 0:
-        return model_mean
-    else:
-        posterior_variance_t = extract(posterior_variance, t, x.shape)
-        noise = torch.randn_like(x)
-        # Algorithm 2 line 4:
-        return model_mean + torch.sqrt(posterior_variance_t) * noise
-
-    # Algorithm 2 but save all images:
-
-
-@torch.no_grad()
-def p_sample_loop(model, shape):
-    device = next(model.parameters()).device
-
-    b = shape[0]
-    # start from pure noise (for each example in the batch)
-    img = torch.randn(shape, device=device)
-    imgs = []
-
-    for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
-        img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i)
-        imgs.append(img.cpu().numpy())
-    return imgs
-
-
-@torch.no_grad()
-def sample(model, image_size, batch_size=16, channels=3):
-    return p_sample_loop(model, shape=(batch_size, channels, image_size, image_size))
-
-
-if __name__ == "__main__":
-    from pathlib import Path
-
-
-    def num_to_groups(num, divisor):
-        groups = num // divisor
-        remainder = num % divisor
-        arr = [divisor] * groups
-        if remainder > 0:
-            arr.append(remainder)
-        return arr
-
-
-    results_folder = Path("./results")
-    results_folder.mkdir(exist_ok=True)
-    save_and_sample_every = 1000
-
-    from torch.optim import Adam
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    print("image_size", str(image_size))
-    print("channels", str(channels))
-
+def get_model(args):
     model = Unet(
-        dim=image_size,
-        channels=channels,
+        dim=args.image_size,
+        channels=args.channels,
         dim_mults=(1, 2, 4,)
     )
-    model.to(device)
+    if args.load:
+        model.load_state_dict(torch.load("model/model.pth"))
+    if args.multi_gpu and torch.cuda.device_count() > 1:
+        print("Using", torch.cuda.device_count(), "GPUs!")
+        model = nn.DataParallel(model)
+    model.to(args.device)
+    return model
 
-    optimizer = Adam(model.parameters(), lr=1e-5)
 
-    from torchvision.utils import save_image
-
-    epochs = 20
-
-    from prepare_data import generate_density_map, CryoEMDataset
-    from util.map_splitter import split_map, reconstruct_map
-    # ---------------------
-    image_size = 64
-    channels = 1
-    batch_size = 16
+def get_dataset(args):
+    in_map_list = list()
+    out_map_list = list()
+    in_label = list()
+    out_label = list()
     pdb = '/data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb'
-    in_map, out_map = generate_density_map(pdb, 3, 6, 1)
-    in_map = split_map(in_map.data)
-    out_map = split_map(out_map.data)
-    in_label = torch.full((len(in_map),), 6.0)
-    out_label = torch.full((len(in_map),), 3.0)
-    dataset = CryoEMDataset(in_map, out_map, in_label, out_label)
-    dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
-    # ---------------------
+    for i in np.arange(3.5, 10.5, 0.5):
+        in_map, out_map = generate_density_map(pdb, i, 3.0, 1)
+        in_map, out_map = split_map(in_map.data), split_map(out_map.data)
+        in_map_list += in_map
+        out_map_list += out_map
+        in_label.append(torch.full((len(in_map),), i))
+        out_label.append(torch.full((len(in_map),), 3.0))
+    dataset = CryoEMDataset(in_map_list, out_map_list, torch.cat(in_label, 0), torch.cat(out_label, 0))
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+    return dataloader
 
-    for epoch in range(epochs):
+def train(args, model, dataloader):
+    # def num_to_groups(num, divisor):
+    #     groups = num // divisor
+    #     remainder = num % divisor
+    #     arr = [divisor] * groups
+    #     if remainder > 0:
+    #         arr.append(remainder)
+    #     return arr
+    #
+    # results_folder = Path("./results")
+    # results_folder.mkdir(exist_ok=True)
+    # save_and_sample_every = 1000
+
+    optimizer = Adam(model.parameters(), lr=args.lr)
+
+    for epoch in range(args.epochs):
         for step, batch in enumerate(dataloader):
             optimizer.zero_grad()
 
-            # batch_size = len(batch)  # batch.shape[0]
-            # batch = batch.to(device)
-            # print(batch.shape)
-            # exit(0)
             batch_size = len(batch[0])
-            in_batch = batch[0].to(device)
-            out_batch = batch[2].to(device)
-            in_label = batch[1].to(device)
-            # exit(0)
+            in_batch = batch[0].to(args.device)
+            in_resolution = batch[1].to(args.device)
+            out_batch = batch[2].to(args.device)
+            out_resolution = batch[3].to(args.device)
 
-            # Algorithm 1 line 3: sample t uniformally for every example in the batch
-            t = torch.randint(0, timesteps, (batch_size,), device=device).long()
-            # i = torch.full((batch_size,), 5.0, device=device)
+            # Algorithm 1 line 3: sample t uniformly for every example in the batch
+            t_tensor = torch.randint(0, timesteps, (batch_size,), device=args.device).long()
 
-            loss = p_losses(model, in_batch.float(), out_batch.float(), t, in_label, loss_type="huber")
+            loss = p_losses(
+                model,
+                in_batch.float(),
+                out_batch.float(),
+                t_tensor,
+                in_resolution,
+                out_resolution,
+                loss_type="huber"
+            )
 
             if step % 10 == 0:
                 print("Loss:", loss.item())
 
             loss.backward()
             optimizer.step()
-            # print(model.input_A_mlp[1].weight)
 
             # save generated images
-            if step != 0 and step % save_and_sample_every == 0:
-                milestone = step // save_and_sample_every
-                batches = num_to_groups(4, batch_size)
-                all_images_list = list(map(lambda n: sample(model, batch_size=n, channels=channels), batches))
-                all_images = torch.cat(all_images_list, dim=0)
-                all_images = (all_images + 1) * 0.5
-                save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+            # if step != 0 and step % save_and_sample_every == 0:
+            #     milestone = step // save_and_sample_every
+            #     batches = num_to_groups(4, batch_size)
+            #     all_images_list = list(map(lambda n: sample(model, batch_size=n, channels=args.channels), batches))
+            #     all_images = torch.cat(all_images_list, dim=0)
+            #     all_images = (all_images + 1) * 0.5
+            #     save_image(all_images, str(results_folder / f'sample-{milestone}.png'), nrow=6)
+
+    if isinstance(model, nn.DataParallel):
+        torch.save(model.module.state_dict(), "model/model.pth")
+    else:
+        torch.save(model.state_dict(), "model/model.pth")
+    print("Model saved to model/model.pth!")
+
+
+@torch.no_grad()
+def p_sample(args, model, in_batch, x, t_tensor, t, in_label, out_label):
+    betas_t = extract(betas, t_tensor, x.shape)
+    sqrt_one_minus_alphas_cumprod_t = extract(sqrt_one_minus_alphas_cumprod, t_tensor, x.shape)
+    sqrt_recip_alphas_t = extract(sqrt_recip_alphas, t_tensor, x.shape)
+
+    # Equation 11 in the paper
+    # Use our model (noise predictor) to predict the mean
+    in_tensor = torch.cat((in_batch, x), dim=1)
+    predicted_noise = model(in_tensor, t_tensor, in_label, out_label)
+    model_mean = sqrt_recip_alphas_t * (x - betas_t * predicted_noise / sqrt_one_minus_alphas_cumprod_t)
+
+    if t == 0:
+        return model_mean
+    else:
+        posterior_variance_t = extract(posterior_variance, t_tensor, x.shape)
+        noise = torch.randn_like(x)
+        # Algorithm 2 line 4:
+        return model_mean + torch.sqrt(posterior_variance_t) * noise
+
+
+# Algorithm 2 but save all images:
+@torch.no_grad()
+def p_sample_loop(args, model, in_batch):
+    b = in_batch.shape[0]
+    # start from pure noise (for each example in the batch)
+    x = torch.randn(in_batch.shape, device=args.device).float()
+    # imgs = []
+    in_resolution = torch.full((b,), args.input_resolution, device=args.device, dtype=torch.long)
+    out_resolution = torch.full((b,), args.output_resolution, device=args.device, dtype=torch.long)
+
+    for t in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
+        t_tensor = torch.full((b,), t, device=args.device, dtype=torch.long)
+        x = p_sample(args, model, in_batch, x, t_tensor, t, in_resolution, out_resolution)
+        # imgs.append(img.cpu().numpy())
+    return x
+
+
+@torch.no_grad()
+def predict(args, model, density_map):
+    in_map = np.stack(split_map(density_map.data, box_size=args.image_size, core_size=args.core_size))
+    out_map = []
+    for i in range(0, len(in_map), args.batch_size):
+        print("Batch:", i + 1, "Total:", -(-len(in_map) // args.batch_size))
+        in_map_batch = torch.from_numpy(in_map[i:i + args.batch_size]).to(args.device)
+        out_map_batch = p_sample_loop(args, model, in_map_batch.float())
+        for out_map_i in out_map_batch:
+            out_map.append(out_map_i[0].detach().cpu().numpy())
+    out_map = reconstruct_map(out_map, target_shape=density_map.shape, box_size=args.image_size, core_size=args.core_size)
+    density_map.data = out_map
+    return density_map
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description='Parameter Processing')
+    parser.add_argument('--image_size', type=int, default=64, help='image size')
+    parser.add_argument('--core_size', type=int, default=50, help='core size')
+    parser.add_argument('--channels', type=int, default=1, help='channels')
+    parser.add_argument('--batch_size', type=int, default=16, help='batch size')
+    parser.add_argument('--lr', type=float, default=1e-5, help='learning rate')
+    parser.add_argument('--epochs', type=int, default=200, help='epochs')
+    parser.add_argument('--load', action='store_true', help='load model')
+    parser.add_argument('--path', type=str, default='model/model.pth', help='model path')
+    parser.add_argument('--device', type=str, default='cuda', help='device')
+    parser.add_argument('--multi_gpu', default=True, action='store_true', help='muti_gpu')
+    parser.add_argument('--train', action='store_true', help='train')
+    parser.add_argument('--predict', action='store_true', help='predict')
+    parser.add_argument('--input_path', type=str, default='dataset/emd_3186.map', help='input path')
+    parser.add_argument('--input_resolution', type=float, default=7.9, help='input resolution')
+    parser.add_argument('--output_resolution', type=float, default=3.0, help='output resolution')
+    args = parser.parse_args()
+    
+    if args.device == 'cuda':
+        args.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    model = get_model(args)
+    if args.train:
+        dataloader = get_dataset(args)
+        train(args, model, dataloader)
+    if args.predict:
+        print("Super Resolution Inference Starting...")
+        print("Input map path:", args.input_path)
+        assert args.input_resolution > args.output_resolution, "Input resolution must be larger than output resolution"
+        print("Super resolution from", args.input_resolution, "to", args.output_resolution)
+        density_map = DensityMap.open(args.input_path)
+        predict(args, model, density_map)
+        density_map.save('dataset/emd_3186_predict.mrc')
+        print("Output map saved to: dataset/emd_3186_predict.mrc")

@@ -1,0 +1,305 @@
+ssh://sbcaesar@dais10.uwb.edu:22/data/sbcaesar/diffusion_venv/bin/python -u /data/sbcaesar/Mac-SR-CryoEM/3D-diffusion-model.py
+image_size 64
+channels 1
+Using 6 GPUs!
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingwb5m1ea3/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingwb5m1ea3/in.mrc
+molmap #0 3.5 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingwb5m1ea3/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingm_7visg0/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingm_7visg0/in.mrc
+molmap #0 4.0 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingm_7visg0/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingea65c_5a/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingea65c_5a/in.mrc
+molmap #0 4.5 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingea65c_5a/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingscqjgbdq/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingscqjgbdq/in.mrc
+molmap #0 5.0 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingscqjgbdq/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessing1a1ylgii/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessing1a1ylgii/in.mrc
+molmap #0 5.5 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessing1a1ylgii/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingwq3m_cu4/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingwq3m_cu4/in.mrc
+molmap #0 6.0 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingwq3m_cu4/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingjuiwdub8/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingjuiwdub8/in.mrc
+molmap #0 6.5 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingjuiwdub8/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessing3092p9hy/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessing3092p9hy/in.mrc
+molmap #0 7.0 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessing3092p9hy/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingucr6covl/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingucr6covl/in.mrc
+molmap #0 7.5 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingucr6covl/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessinguyb8b_we/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessinguyb8b_we/in.mrc
+molmap #0 8.0 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessinguyb8b_we/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingkvz8u6mu/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingkvz8u6mu/in.mrc
+molmap #0 8.5 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingkvz8u6mu/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingnmddd19k/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingnmddd19k/in.mrc
+molmap #0 9.0 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingnmddd19k/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingvw31wwlk/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingvw31wwlk/in.mrc
+molmap #0 9.5 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingvw31wwlk/out.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+molmap #0 3 gridSpacing 1
+volume #0 save /tmp/deeptracer_preprocessingmt3arset/in.mrc
+open /data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb
+open /tmp/deeptracer_preprocessingmt3arset/in.mrc
+molmap #0 10.0 onGrid #1
+volume #2 save /tmp/deeptracer_preprocessingmt3arset/out.mrc
+Loss: 0.47420191764831543
+Loss: 0.4296126365661621
+Loss: 0.42691463232040405
+Loss: 0.42509400844573975
+Loss: 0.4238281548023224
+Loss: 0.4236701726913452
+Loss: 0.4228304624557495
+Loss: 0.42261552810668945
+Loss: 0.42156291007995605
+Loss: 0.42065468430519104
+Loss: 0.42014285922050476
+Loss: 0.4158448576927185
+Loss: 0.4140416383743286
+Loss: 0.410561740398407
+Loss: 0.4050353765487671
+Loss: 0.40082818269729614
+Loss: 0.39477241039276123
+Loss: 0.38583236932754517
+Loss: 0.3757117986679077
+Loss: 0.3693704307079315
+Loss: 0.35921066999435425
+Loss: 0.35421961545944214
+Loss: 0.3412535488605499
+Loss: 0.3266775608062744
+Loss: 0.31527507305145264
+Loss: 0.30006128549575806
+Loss: 0.2981703281402588
+Loss: 0.27712103724479675
+Loss: 0.2701314687728882
+Loss: 0.2692330479621887
+Loss: 0.24558046460151672
+Loss: 0.2391650378704071
+Loss: 0.23040764033794403
+Loss: 0.24288299679756165
+Loss: 0.2358904480934143
+Loss: 0.2235710471868515
+Loss: 0.2061026394367218
+Loss: 0.21231788396835327
+Loss: 0.19968777894973755
+Loss: 0.1737164855003357
+Loss: 0.17031973600387573
+Loss: 0.16752032935619354
+Loss: 0.1581181287765503
+Loss: 0.1518244445323944
+Loss: 0.1695612072944641
+Loss: 0.1434280425310135
+Loss: 0.13650886714458466
+Loss: 0.13750481605529785
+Loss: 0.12813103199005127
+Loss: 0.14036865532398224
+Loss: 0.13921011984348297
+Loss: 0.1345316767692566
+Loss: 0.11618129909038544
+Loss: 0.11295749247074127
+Loss: 0.11945994198322296
+Loss: 0.10597015917301178
+Loss: 0.10576477646827698
+Loss: 0.10221477597951889
+Loss: 0.09963800758123398
+Loss: 0.0952300876379013
+Loss: 0.09557931870222092
+Loss: 0.10133042931556702
+Loss: 0.1025967076420784
+Loss: 0.09279000014066696
+Loss: 0.09976716339588165
+Loss: 0.09547397494316101
+Loss: 0.09732861071825027
+Loss: 0.086674764752388
+Loss: 0.0899951383471489
+Loss: 0.08478938043117523
+Loss: 0.08167195320129395
+Loss: 0.08097855001688004
+Loss: 0.08147937804460526
+Loss: 0.09227002412080765
+Loss: 0.07764721661806107
+Loss: 0.08714962005615234
+Loss: 0.08546958863735199
+Loss: 0.08759032934904099
+Loss: 0.0749882385134697
+Loss: 0.08861465752124786
+Loss: 0.08150987327098846
+Loss: 0.07813667505979538
+Loss: 0.07687696069478989
+Loss: 0.0804838165640831
+Loss: 0.07563792914152145
+Loss: 0.06832493096590042
+Loss: 0.0765809714794159
+Loss: 0.10089048743247986
+Loss: 0.08705773204565048
+Loss: 0.08186133950948715
+Loss: 0.0715106874704361
+Loss: 0.06863290816545486
+Loss: 0.06895765662193298
+Loss: 0.06967844069004059
+Loss: 0.08815552294254303
+Loss: 0.07331495732069016
+Loss: 0.07709047943353653
+Loss: 0.06222489848732948
+Loss: 0.0717945545911789
+Loss: 0.061286911368370056
+Loss: 0.062677301466465
+Loss: 0.06353583931922913
+Loss: 0.06915857642889023
+Loss: 0.0773659199476242
+Loss: 0.0671076700091362
+Loss: 0.05849837511777878
+Loss: 0.061168089509010315
+Loss: 0.06248036399483681
+Loss: 0.08059820532798767
+Loss: 0.06321435421705246
+Loss: 0.058912474662065506
+Loss: 0.05699552223086357
+Loss: 0.057488925755023956
+Loss: 0.056641608476638794
+Loss: 0.056257180869579315
+Loss: 0.06491699069738388
+Loss: 0.054181814193725586
+Loss: 0.05613568425178528
+Loss: 0.052654802799224854
+Loss: 0.054587043821811676
+Loss: 0.07487471401691437
+Loss: 0.058478549122810364
+Loss: 0.05462297797203064
+Loss: 0.06482397764921188
+Loss: 0.05221644043922424
+Loss: 0.053698740899562836
+Loss: 0.054756201803684235
+Loss: 0.053374264389276505
+Loss: 0.060560472309589386
+Loss: 0.06992103159427643
+Loss: 0.05557205528020859
+Loss: 0.06387646496295929
+Loss: 0.05452825874090195
+Loss: 0.07039256393909454
+Loss: 0.05466778576374054
+Loss: 0.05058767646551132
+Loss: 0.05136006698012352
+Loss: 0.04891488328576088
+Loss: 0.06164192408323288
+Loss: 0.048264652490615845
+Loss: 0.06210823357105255
+Loss: 0.05807393416762352
+Loss: 0.051009438931941986
+Loss: 0.052805617451667786
+Loss: 0.05756906792521477
+Loss: 0.048237428069114685
+Loss: 0.04895222932100296
+Loss: 0.047790054231882095
+Loss: 0.04699937626719475
+Loss: 0.04755386710166931
+Loss: 0.055694252252578735
+Loss: 0.053681474179029465
+Loss: 0.04580123350024223
+Loss: 0.0454087033867836
+Loss: 0.05708746612071991
+Loss: 0.04859934747219086
+Loss: 0.04859817773103714
+Loss: 0.06854858994483948
+Loss: 0.04463926702737808
+Loss: 0.04327208921313286
+Loss: 0.05694456025958061
+Loss: 0.04621341824531555
+Loss: 0.048120900988578796
+Loss: 0.04511146619915962
+Loss: 0.05667133256793022
+Loss: 0.050120759755373
+Loss: 0.049154918640851974
+Loss: 0.04484451562166214
+Loss: 0.04427449405193329
+Loss: 0.04509411379694939
+Loss: 0.052143942564725876
+Loss: 0.04453733190894127
+Loss: 0.05793411284685135
+Loss: 0.05830956622958183
+Loss: 0.054854489862918854
+Loss: 0.06413475424051285
+Loss: 0.04417734593153
+Loss: 0.047233425080776215
+Loss: 0.05460545793175697
+Loss: 0.04767604172229767
+Loss: 0.05233992263674736
+Loss: 0.04036225378513336
+Loss: 0.048319727182388306
+Loss: 0.048976361751556396
+Loss: 0.04016765207052231
+Loss: 0.040976397693157196
+Loss: 0.0543583482503891
+Loss: 0.04976320639252663
+Loss: 0.05752832442522049
+Loss: 0.04730929806828499
+Loss: 0.039631374180316925
+Loss: 0.04217292368412018
+Loss: 0.043227434158325195
+Loss: 0.041076336055994034
+Loss: 0.043384745717048645
+Loss: 0.039559878408908844
+Loss: 0.04284569248557091
+Loss: 0.0400061309337616
+Loss: 0.04579746723175049
+Loss: 0.04150377959012985
+Model saved to model/model.pth!
+
+Process finished with exit code 0
