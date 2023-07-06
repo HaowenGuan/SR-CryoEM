@@ -15,6 +15,7 @@ from torchvision.utils import save_image
 from torch.optim import Adam
 from prepare_data import simulate_new, simulate_on_grid, CryoEMDataset
 from util.map_splitter import split_map, reconstruct_map
+from util.normalize import normalize_map
 from pathlib import Path
 from util.density_map import DensityMap
 import tempfile
@@ -446,9 +447,11 @@ def get_dataset(args):
         in_res = 8.0
         tmp_map_path = '/data/sbcaesar/Mac-SR-CryoEM/dataset/emd_3186.map'
         in_map = DensityMap.open(tmp_map_path)
+        in_map = normalize_map(in_map)
         in_data = split_map(in_map.data)
         for out_res in np.arange(2.5, in_res, 0.5):
             out_map = simulate_on_grid(pdb, out_res, tmp_map_path)
+            out_map = normalize_map(out_map)
             out_data = split_map(out_map.data)
             in_map_list += in_data
             out_map_list += out_data
@@ -464,12 +467,14 @@ def get_dataset(args):
         pdb = '/data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb'
         for in_res in np.arange(4.0, 10.0, 0.4):
             in_map = simulate_new(pdb, in_res, 1)
+            in_map = normalize_map(in_map)
             in_data = split_map(in_map.data)
             tmp_dir = tempfile.mkdtemp(prefix='deeptracer_preprocessing')
             tmp_map_path = os.path.join(tmp_dir, 'in.mrc')
             in_map.save(tmp_map_path)
             for out_res in np.arange(2.5, in_res, 0.5):
                 out_map = simulate_on_grid(pdb, out_res, tmp_map_path)
+                out_map = normalize_map(out_map)
                 out_data = split_map(out_map.data)
                 in_map_list += in_data
                 out_map_list += out_data
@@ -478,6 +483,7 @@ def get_dataset(args):
             shutil.rmtree(tmp_dir)
         dataset = CryoEMDataset(in_map_list, out_map_list, torch.cat(in_label, 0), torch.cat(out_label, 0))
         torch.save(dataset, "/data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt")
+        print("Saved dataset to /data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt")
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
     return dataloader
 
@@ -590,8 +596,8 @@ if __name__ == "__main__":
     parser.add_argument('--multi_gpu', default=True, action='store_true', help='muti_gpu')
     parser.add_argument('--train', action='store_true', help='train')
     parser.add_argument('--predict', action='store_true', help='predict')
-    parser.add_argument('--input_path', type=str, default='dataset/emd_3186.map', help='input path')
-    parser.add_argument('--input_resolution', type=float, default=9.0, help='input resolution')
+    parser.add_argument('--input_path', type=str, default='dataset/sim7.mrc', help='input path')
+    parser.add_argument('--input_resolution', type=float, default=7.0, help='input resolution')
     parser.add_argument('--output_resolution', type=float, default=3.0, help='output resolution')
     args = parser.parse_args()
 
