@@ -13,11 +13,14 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 from torch.optim import Adam
-from prepare_data import generate_density_map, CryoEMDataset
+from prepare_data import simulate_new, simulate_on_grid, CryoEMDataset
 from util.map_splitter import split_map, reconstruct_map
 from pathlib import Path
 from util.density_map import DensityMap
-
+import tempfile
+import os
+import shutil
+import wandb
 
 
 def exists(x):
@@ -424,7 +427,7 @@ def get_model(args):
         dim_mults=(1, 2, 4,)
     )
     if args.load:
-        model.load_state_dict(torch.load("model/model.pth"))
+        model.load_state_dict(torch.load("model/model_Y.pth"))
     if args.multi_gpu and torch.cuda.device_count() > 1:
         print("Using", torch.cuda.device_count(), "GPUs!")
         model = nn.DataParallel(model)
@@ -433,27 +436,57 @@ def get_model(args):
 
 
 def get_dataset(args):
-    in_map_list = list()
-    out_map_list = list()
-    in_label = list()
-    out_label = list()
-    pdb = '/data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb'
-    for i in np.arange(3.5, 10.5, 0.5):
-        in_map, out_map = generate_density_map(pdb, i, 3.0, 1)
-        in_map, out_map = split_map(in_map.data), split_map(out_map.data)
-        in_map_list += in_map
-        out_map_list += out_map
-        in_label.append(torch.full((len(in_map),), i))
-        out_label.append(torch.full((len(in_map),), 3.0))
-    dataset = CryoEMDataset(in_map_list, out_map_list, torch.cat(in_label, 0), torch.cat(out_label, 0))
+    if os.path.isfile("/data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt"):
+        dataset = torch.load("/data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt")
+        in_map_list = dataset.in_map
+        out_map_list = dataset.out_map
+        in_label = [dataset.in_label]
+        out_label = [dataset.out_label]
+        pdb = '/data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb'
+        in_res = 8.0
+        tmp_map_path = '/data/sbcaesar/Mac-SR-CryoEM/dataset/emd_3186.map'
+        in_map = DensityMap.open(tmp_map_path)
+        in_data = split_map(in_map.data)
+        for out_res in np.arange(2.5, in_res, 0.5):
+            out_map = simulate_on_grid(pdb, out_res, tmp_map_path)
+            out_data = split_map(out_map.data)
+            in_map_list += in_data
+            out_map_list += out_data
+            in_label.append(torch.full((len(in_data),), in_res))
+            out_label.append(torch.full((len(out_data),), out_res))
+        dataset.in_label = torch.cat(in_label, 0)
+        dataset.out_label = torch.cat(out_label, 0)
+    else:
+        in_map_list = list()
+        out_map_list = list()
+        in_label = list()
+        out_label = list()
+        pdb = '/data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb'
+        for in_res in np.arange(4.0, 10.0, 0.4):
+            in_map = simulate_new(pdb, in_res, 1)
+            in_data = split_map(in_map.data)
+            tmp_dir = tempfile.mkdtemp(prefix='deeptracer_preprocessing')
+            tmp_map_path = os.path.join(tmp_dir, 'in.mrc')
+            in_map.save(tmp_map_path)
+            for out_res in np.arange(2.5, in_res, 0.5):
+                out_map = simulate_on_grid(pdb, out_res, tmp_map_path)
+                out_data = split_map(out_map.data)
+                in_map_list += in_data
+                out_map_list += out_data
+                in_label.append(torch.full((len(in_data),), in_res))
+                out_label.append(torch.full((len(out_data),), out_res))
+            shutil.rmtree(tmp_dir)
+        dataset = CryoEMDataset(in_map_list, out_map_list, torch.cat(in_label, 0), torch.cat(out_label, 0))
+        torch.save(dataset, "/data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt")
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
     return dataloader
 
 def train(args, model, dataloader):
     optimizer = Adam(model.parameters(), lr=args.lr)
-
+    i = 0
     for epoch in range(args.epochs):
         for step, batch in enumerate(dataloader):
+            i += 1
             optimizer.zero_grad()
 
             batch_size = len(batch[0])
@@ -476,16 +509,17 @@ def train(args, model, dataloader):
             )
 
             if step % 10 == 0:
-                print("Loss:", loss.item())
+                print("Epoch:", epoch, "Loss:", loss.item())
+                wandb.log({"Loss": loss.item()}, step=i)
 
             loss.backward()
             optimizer.step()
 
-    if isinstance(model, nn.DataParallel):
-        torch.save(model.module.state_dict(), "model/model.pth")
-    else:
-        torch.save(model.state_dict(), "model/model.pth")
-    print("Model saved to model/model.pth!")
+        if isinstance(model, nn.DataParallel):
+            torch.save(model.module.state_dict(), args.model_path.format(epoch))
+        else:
+            torch.save(model.state_dict(), args.model_path.format(epoch))
+        print("Model saved to", args.model_path.format(epoch))
 
 
 @torch.no_grad()
@@ -498,7 +532,7 @@ def p_sample(args, model, in_batch, x, t_tensor, t, in_label, out_label):
     # Use our model (noise predictor) to predict the mean
     in_tensor = torch.cat((in_batch, x), dim=1)
     predicted_noise = model(in_tensor, t_tensor, in_label, out_label)
-    model_mean = sqrt_recip_alphas_t * (x - betas_t * predicted_noise / sqrt_one_minus_alphas_cumprod_t)
+    model_mean = sqrt_recip_alphas_t * (x - (betas_t * predicted_noise / sqrt_one_minus_alphas_cumprod_t))
 
     if t == 0:
         return model_mean
@@ -551,23 +585,30 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, default=1e-5, help='learning rate')
     parser.add_argument('--epochs', type=int, default=200, help='epochs')
     parser.add_argument('--load', action='store_true', help='load model')
-    parser.add_argument('--path', type=str, default='model/model.pth', help='model path')
+    parser.add_argument('--model_path', type=str, default='model/model_{}.pth', help='model path')
     parser.add_argument('--device', type=str, default='cuda', help='device')
     parser.add_argument('--multi_gpu', default=True, action='store_true', help='muti_gpu')
     parser.add_argument('--train', action='store_true', help='train')
     parser.add_argument('--predict', action='store_true', help='predict')
     parser.add_argument('--input_path', type=str, default='dataset/emd_3186.map', help='input path')
-    parser.add_argument('--input_resolution', type=float, default=7.9, help='input resolution')
+    parser.add_argument('--input_resolution', type=float, default=9.0, help='input resolution')
     parser.add_argument('--output_resolution', type=float, default=3.0, help='output resolution')
     args = parser.parse_args()
-    
+
     if args.device == 'cuda':
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = get_model(args)
+
     if args.train:
+        wandb.init(sync_tensorboard=False,
+                   project="Diffusion-Super-Resolution",
+                   job_type="CleanRepo",
+                   config=args,
+                   )
         dataloader = get_dataset(args)
         train(args, model, dataloader)
+
     if args.predict:
         print("Super Resolution Inference Starting...")
         print("Input map path:", args.input_path)
@@ -575,5 +616,6 @@ if __name__ == "__main__":
         print("Super resolution from", args.input_resolution, "to", args.output_resolution)
         density_map = DensityMap.open(args.input_path)
         predict(args, model, density_map)
-        density_map.save('dataset/emd_3186_predict.mrc')
-        print("Output map saved to: dataset/emd_3186_predict.mrc")
+        output_path = 'dataset/emd_3186_predict_{}.mrc'.format(args.output_resolution)
+        density_map.save(output_path)
+        print(output_path)

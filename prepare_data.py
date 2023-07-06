@@ -38,185 +38,34 @@ class CryoEMDataset(Dataset):
         return in_map, in_label, out_map, out_label
 
 
-def generate_density_map(solved_structure_path: str, in_res: float, out_res: float, grid_size: float):
-    """
-    Generate density map from solved structure
-    :param solved_structure_path: The path to the solved structure
-    :param in_res: The resolution of the input density map
-    :param out_res: The resolution of the output density map
-    :param grid_size: The grid size of the density map in Angstrom
-    :return: The input and output density map
-    """
-    assert in_res > out_res, 'Input resolution must be larger than output resolution'
+def simulate_new(solved_structure_path: str, resolution: float, grid_size: float):
     # Chimera molmap
     tmp_dir = tempfile.mkdtemp(prefix='deeptracer_preprocessing')
-    tmp_in_map_path = os.path.join(tmp_dir, 'in.mrc')
-    tmp_out_map_path = os.path.join(tmp_dir, 'out.mrc')
+    tmp_map_path = os.path.join(tmp_dir, 'in.mrc')
     Chimera.run(tmp_dir, [
         'open %s' % solved_structure_path,
-        'molmap #0 %s gridSpacing %s' % (out_res, grid_size),
-        'volume #0 save %s' % tmp_out_map_path,
+        'molmap #0 %s gridSpacing %s' % (resolution, grid_size),
+        'volume #0 save %s' % tmp_map_path,
     ])
-    Chimera.run(tmp_dir, [
-        'open %s' % solved_structure_path,
-        'open %s' % tmp_out_map_path,
-        'molmap #0 %s onGrid #1' % in_res,
-        'volume #2 save %s' % tmp_in_map_path,
-    ])
-    in_map = DensityMap.open(tmp_in_map_path)
-    out_map = DensityMap.open(tmp_out_map_path)
+    in_map = DensityMap.open(tmp_map_path)
     shutil.rmtree(tmp_dir)
-    return in_map, out_map
+    return in_map
 
 
-def resize_and_convert(img, size, resample):
-    if img.size[0] != size:
-        img = trans_fn.resize(img, size, resample)
-        img = trans_fn.center_crop(img, size)
-    return img
-
-
-def image_convert_bytes(img):
-    buffer = BytesIO()
-    img.save(buffer, format='png')
-    return buffer.getvalue()
-
-
-def resize_multiple(img, sizes=(16, 128), resample=Image.BICUBIC, lmdb_save=False):
-    lr_img = resize_and_convert(img, sizes[0], resample)
-    hr_img = resize_and_convert(img, sizes[1], resample)
-    sr_img = resize_and_convert(lr_img, sizes[1], resample)
-
-    if lmdb_save:
-        lr_img = image_convert_bytes(lr_img)
-        hr_img = image_convert_bytes(hr_img)
-        sr_img = image_convert_bytes(sr_img)
-
-    return [lr_img, hr_img, sr_img]
-
-
-def resize_worker(img_file, sizes, resample, lmdb_save=False):
-    img = Image.open(img_file)
-    img = img.convert('RGB')
-    out = resize_multiple(
-        img, sizes=sizes, resample=resample, lmdb_save=lmdb_save)
-
-    return img_file.name.split('.')[0], out
-
-
-class WorkingContext():
-    def __init__(self, resize_fn, lmdb_save, out_path, env, sizes):
-        self.resize_fn = resize_fn
-        self.lmdb_save = lmdb_save
-        self.out_path = out_path
-        self.env = env
-        self.sizes = sizes
-
-        self.counter = RawValue('i', 0)
-        self.counter_lock = Lock()
-
-    def inc_get(self):
-        with self.counter_lock:
-            self.counter.value += 1
-            return self.counter.value
-
-    def value(self):
-        with self.counter_lock:
-            return self.counter.value
-
-
-def prepare_process_worker(wctx, file_subset):
-    for file in file_subset:
-        i, imgs = wctx.resize_fn(file)
-        lr_img, hr_img, sr_img = imgs
-        if not wctx.lmdb_save:
-            lr_img.save(
-                '{}/lr_{}/{}.png'.format(wctx.out_path, wctx.sizes[0], i.zfill(5)))
-            hr_img.save(
-                '{}/hr_{}/{}.png'.format(wctx.out_path, wctx.sizes[1], i.zfill(5)))
-            sr_img.save(
-                '{}/sr_{}_{}/{}.png'.format(wctx.out_path, wctx.sizes[0], wctx.sizes[1], i.zfill(5)))
-        else:
-            with wctx.env.begin(write=True) as txn:
-                txn.put('lr_{}_{}'.format(
-                    wctx.sizes[0], i.zfill(5)).encode('utf-8'), lr_img)
-                txn.put('hr_{}_{}'.format(
-                    wctx.sizes[1], i.zfill(5)).encode('utf-8'), hr_img)
-                txn.put('sr_{}_{}_{}'.format(
-                    wctx.sizes[0], wctx.sizes[1], i.zfill(5)).encode('utf-8'), sr_img)
-        curr_total = wctx.inc_get()
-        if wctx.lmdb_save:
-            with wctx.env.begin(write=True) as txn:
-                txn.put('length'.encode('utf-8'), str(curr_total).encode('utf-8'))
-
-
-def all_threads_inactive(worker_threads):
-    for thread in worker_threads:
-        if thread.is_alive():
-            return False
-    return True
-
-
-def prepare(img_path, out_path, n_worker, sizes=(16, 128), resample=Image.BICUBIC, lmdb_save=False):
-    resize_fn = partial(resize_worker, sizes=sizes,
-                        resample=resample, lmdb_save=lmdb_save)
-    files = [p for p in Path(
-        '{}'.format(img_path)).glob(f'**/*')]
-
-    if not lmdb_save:
-        os.makedirs(out_path, exist_ok=True)
-        os.makedirs('{}/lr_{}'.format(out_path, sizes[0]), exist_ok=True)
-        os.makedirs('{}/hr_{}'.format(out_path, sizes[1]), exist_ok=True)
-        os.makedirs('{}/sr_{}_{}'.format(out_path,
-                                         sizes[0], sizes[1]), exist_ok=True)
-    else:
-        env = lmdb.open(out_path, map_size=1024 ** 4, readahead=False)
-
-    if n_worker > 1:
-        # prepare data subsets
-        multi_env = None
-        if lmdb_save:
-            multi_env = env
-
-        file_subsets = np.array_split(files, n_worker)
-        worker_threads = []
-        wctx = WorkingContext(resize_fn, lmdb_save, out_path, multi_env, sizes)
-
-        # start worker processes, monitor results
-        for i in range(n_worker):
-            proc = Process(target=prepare_process_worker, args=(wctx, file_subsets[i]))
-            proc.start()
-            worker_threads.append(proc)
-
-        total_count = str(len(files))
-        while not all_threads_inactive(worker_threads):
-            print("\r{}/{} images processed".format(wctx.value(), total_count), end=" ")
-            time.sleep(0.1)
-
-    else:
-        total = 0
-        for file in tqdm(files):
-            i, imgs = resize_fn(file)
-            lr_img, hr_img, sr_img = imgs
-            if not lmdb_save:
-                lr_img.save(
-                    '{}/lr_{}/{}.png'.format(out_path, sizes[0], i.zfill(5)))
-                hr_img.save(
-                    '{}/hr_{}/{}.png'.format(out_path, sizes[1], i.zfill(5)))
-                sr_img.save(
-                    '{}/sr_{}_{}/{}.png'.format(out_path, sizes[0], sizes[1], i.zfill(5)))
-            else:
-                with env.begin(write=True) as txn:
-                    txn.put('lr_{}_{}'.format(
-                        sizes[0], i.zfill(5)).encode('utf-8'), lr_img)
-                    txn.put('hr_{}_{}'.format(
-                        sizes[1], i.zfill(5)).encode('utf-8'), hr_img)
-                    txn.put('sr_{}_{}_{}'.format(
-                        sizes[0], sizes[1], i.zfill(5)).encode('utf-8'), sr_img)
-            total += 1
-            if lmdb_save:
-                with env.begin(write=True) as txn:
-                    txn.put('length'.encode('utf-8'), str(total).encode('utf-8'))
+def simulate_on_grid(solved_structure_path: str, resolution: float, map_path: str):
+    # Chimera molmap
+    tmp_dir = tempfile.mkdtemp(prefix='deeptracer_preprocessing')
+    tmp_map_path = os.path.join(tmp_dir, 'out.mrc')
+    Chimera.run(tmp_dir, [
+        'open %s' % solved_structure_path,
+        'open %s' % map_path,
+        'volume #1 step 1',
+        'molmap #0 %s onGrid #1' % resolution,
+        'volume #2 save %s' % tmp_map_path,
+    ])
+    out_map = DensityMap.open(tmp_map_path)
+    shutil.rmtree(tmp_dir)
+    return out_map
 
 
 if __name__ == '__main__':
@@ -231,11 +80,3 @@ if __name__ == '__main__':
     parser.add_argument('--lmdb', '-l', action='store_true')
 
     args = parser.parse_args()
-
-    resample_map = {'bilinear': Image.BILINEAR, 'bicubic': Image.BICUBIC}
-    resample = resample_map[args.resample]
-    sizes = [int(s.strip()) for s in args.size.split(',')]
-
-    args.out = '{}_{}_{}'.format(args.out, sizes[0], sizes[1])
-    prepare(args.path, args.out, args.n_worker,
-            sizes=sizes, resample=resample, lmdb_save=args.lmdb)

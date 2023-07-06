@@ -300,6 +300,5 @@ Loss: 0.04284569248557091
 Loss: 0.0400061309337616
 Loss: 0.04579746723175049
 Loss: 0.04150377959012985
-Model saved to model/model.pth!
 
-Process finished with exit code 0
+
