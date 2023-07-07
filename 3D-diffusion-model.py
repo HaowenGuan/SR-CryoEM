@@ -428,7 +428,7 @@ def get_model(args):
         dim_mults=(1, 2, 4,)
     )
     if args.load:
-        model.load_state_dict(torch.load("model/model_Y.pth"))
+        model.load_state_dict(torch.load("model/model_1.pth"))
     if args.multi_gpu and torch.cuda.device_count() > 1:
         print("Using", torch.cuda.device_count(), "GPUs!")
         model = nn.DataParallel(model)
@@ -439,31 +439,13 @@ def get_model(args):
 def get_dataset(args):
     if os.path.isfile("/data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt"):
         dataset = torch.load("/data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt")
-        in_map_list = dataset.in_map
-        out_map_list = dataset.out_map
-        in_label = [dataset.in_label]
-        out_label = [dataset.out_label]
-        pdb = '/data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb'
-        in_res = 8.0
-        tmp_map_path = '/data/sbcaesar/Mac-SR-CryoEM/dataset/emd_3186.map'
-        in_map = DensityMap.open(tmp_map_path)
-        in_map = normalize_map(in_map)
-        in_data = split_map(in_map.data)
-        for out_res in np.arange(2.5, in_res, 0.5):
-            out_map = simulate_on_grid(pdb, out_res, tmp_map_path)
-            out_map = normalize_map(out_map)
-            out_data = split_map(out_map.data)
-            in_map_list += in_data
-            out_map_list += out_data
-            in_label.append(torch.full((len(in_data),), in_res))
-            out_label.append(torch.full((len(out_data),), out_res))
-        dataset.in_label = torch.cat(in_label, 0)
-        dataset.out_label = torch.cat(out_label, 0)
     else:
         in_map_list = list()
         out_map_list = list()
         in_label = list()
         out_label = list()
+
+        # Adding simulated data
         pdb = '/data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb'
         for in_res in np.arange(4.0, 10.0, 0.4):
             in_map = simulate_new(pdb, in_res, 1)
@@ -481,6 +463,22 @@ def get_dataset(args):
                 in_label.append(torch.full((len(in_data),), in_res))
                 out_label.append(torch.full((len(out_data),), out_res))
             shutil.rmtree(tmp_dir)
+
+        # Adding real data
+        in_res = 8.0
+        tmp_map_path = '/data/sbcaesar/Mac-SR-CryoEM/dataset/emd_3186.map'
+        in_map = DensityMap.open(tmp_map_path)
+        in_map = normalize_map(in_map)
+        in_data = split_map(in_map.data)
+        for out_res in np.arange(2.5, in_res, 0.5):
+            out_map = simulate_on_grid(pdb, out_res, tmp_map_path)
+            out_map = normalize_map(out_map)
+            out_data = split_map(out_map.data)
+            in_map_list += in_data
+            out_map_list += out_data
+            in_label.append(torch.full((len(in_data),), in_res))
+            out_label.append(torch.full((len(out_data),), out_res))
+
         dataset = CryoEMDataset(in_map_list, out_map_list, torch.cat(in_label, 0), torch.cat(out_label, 0))
         torch.save(dataset, "/data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt")
         print("Saved dataset to /data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt")
@@ -612,6 +610,10 @@ if __name__ == "__main__":
                    job_type="CleanRepo",
                    config=args,
                    )
+        print("Super Resolution Training Starting...")
+        if args.load:
+            print("Loaded model from", args.model_path)
+        print("Training LR:", args.lr)
         dataloader = get_dataset(args)
         train(args, model, dataloader)
 
