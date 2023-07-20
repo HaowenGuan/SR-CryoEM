@@ -1,297 +1,148 @@
-<img src="./images/denoising-diffusion.png" width="500px"></img>
+# Diffusion Denoising Probabilistic Model for CryoEM Super Resolution
 
-## Denoising Diffusion Probabilistic Model, in Pytorch
+![example](image/example.png)
 
-Implementation of <a href="https://arxiv.org/abs/2006.11239">Denoising Diffusion Probabilistic Model</a> in Pytorch. It is a new approach to generative modeling that may <a href="https://ajolicoeur.wordpress.com/the-new-contender-to-gans-score-matching-with-langevin-sampling/">have the potential</a> to rival GANs. It uses denoising score matching to estimate the gradient of the data distribution, followed by Langevin sampling to sample from the true distribution.
+## Forward Process
 
-This implementation was transcribed from the official Tensorflow version <a href="https://github.com/hojonathanho/diffusion">here</a>
+Firstly, we define a ratio:
 
-Youtube AI Educators - <a href="https://www.youtube.com/watch?v=W-O7AZNzbzQ">Yannic Kilcher</a> | <a href="https://www.youtube.com/watch?v=344w5h24-h8">AI Coffeebreak with Letitia</a> | <a href="https://www.youtube.com/watch?v=HoKDTa5jHvg">Outlier</a>
+$$\beta_t \in (0, 1)$$
 
-<a href="https://github.com/yiyixuxu/denoising-diffusion-flax">Flax implementation</a> from <a href="https://github.com/yiyixuxu">YiYi Xu</a>
+$\beta_t$ usually start from 0.0001 and increase to 0.002, based on original paper. (Can be arbitrary).
 
-<a href="https://huggingface.co/blog/annotated-diffusion">Annotated code</a> by Research Scientists / Engineers from <a href="https://huggingface.co/">🤗 Huggingface</a>
+Lets define input image as $x_0$, and $x_t$ is the output image after $t$ iterations of forward adding noise process, as follows:
 
-Update: Turns out none of the technicalities really matters at all | <a href="https://arxiv.org/abs/2208.09392">"Cold Diffusion" paper</a> | <a href="https://muse-model.github.io/">Muse</a>
+$$x_t = \sqrt{\alpha_t} x_{t - 1} + \sqrt{1 - \alpha_t} z_t$$
 
-<img src="./images/sample.png" width="500px"><img>
+where $z_t \sim \mathcal{N}(0, 1)$, and $\alpha_t = 1 - \beta_t$.
 
-[![PyPI version](https://badge.fury.io/py/denoising-diffusion-pytorch.svg)](https://badge.fury.io/py/denoising-diffusion-pytorch)
+We know $x_t$ can be calculated iteratively from the previous $x_{t - 1}$, but it is very slow. Is there way to calculate $x_t$ directly from $x_0$?
 
-## Install
+Plug $x_{t - 1} = \sqrt{\alpha_{t - 1}} x_{t - 2} + \sqrt{1 - \alpha_{t - 1}} z_{t - 1}$ into previous equation, we have:
 
-```bash
-$ pip install denoising_diffusion_pytorch
-```
+$$\begin{aligned}
+x_t &= \sqrt{\alpha_t} \left(\sqrt{\alpha_{t - 1}} x_{t - 2} + \sqrt{1 - \alpha_{t - 1}} z_{t - 1}\right) + \sqrt{1 - \alpha_t} z_t\\
+x_t &= \sqrt{\alpha_t \alpha_{t - 1}} x_{t - 2} + \left(\sqrt{\alpha_t(1 - \alpha_{t - 1})} z_{t - 1} + \sqrt{1 - \alpha_t} z_t\right)
+\end{aligned}$$
 
-## Usage
+Notice $z_t, z_{t - 1}, ... \sim \mathcal{N}(0, 1)$, thus they are indeed,
 
-```python
-import torch
-from denoising_diffusion_pytorch import Unet, GaussianDiffusion
+$$\begin{aligned}
+\sqrt{\alpha_t(1 - \alpha_{t - 1})} z_{t - 1} &= \mathcal{N}(0, \alpha_t(1 - \alpha_{t - 1})) \\
+\sqrt{1 - \alpha_t} z_t &= \mathcal{N}(0, 1 - \alpha_t)
+\end{aligned}$$
 
-model = Unet(
-    dim = 64,
-    dim_mults = (1, 2, 4, 8)
-)
+This addition follows gaussian's law:
 
-diffusion = GaussianDiffusion(
-    model,
-    image_size = 128,
-    timesteps = 1000,   # number of steps
-    loss_type = 'l1'    # L1 or L2
-)
+$$\mathcal{N}(0, \theta_1^2 \mathbf{I}) + \mathcal{N}(0, \theta_2^2 \mathbf{I}) \equiv \mathcal{N}(0, (\theta_1^2 + \theta_2^2) \mathbf{I})$$
 
-training_images = torch.rand(8, 3, 128, 128) # images are normalized from 0 to 1
-loss = diffusion(training_images)
-loss.backward()
-# after a lot of training
+Thus we have:
 
-sampled_images = diffusion.sample(batch_size = 4)
-sampled_images.shape # (4, 3, 128, 128)
-```
+$$x_t = \sqrt{\alpha_t \alpha_{t - 1}} x_{t - 2} + \sqrt{1 - \alpha_t\alpha_{t - 1}} z$$
 
-Or, if you simply want to pass in a folder name and the desired image dimensions, you can use the `Trainer` class to easily train a model.
+Doing the same thing iteratively, we have:
 
-```python
-from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer
+$$x_t = \sqrt{\bar \alpha_t} x_{0} + \sqrt{1 - \bar\alpha_t} z$$
 
-model = Unet(
-    dim = 64,
-    dim_mults = (1, 2, 4, 8)
-)
+where $\bar\alpha_t = \prod_{i = 1}^t \alpha_i$.
 
-diffusion = GaussianDiffusion(
-    model,
-    image_size = 128,
-    timesteps = 1000,           # number of steps
-    sampling_timesteps = 250,   # number of sampling timesteps (using ddim for faster inference [see citation for ddim paper])
-    loss_type = 'l1'            # L1 or L2
-)
+**We can see that $x_t$ can be calculated directly from $x_0$ and $z$.**
 
-trainer = Trainer(
-    diffusion,
-    'path/to/your/images',
-    train_batch_size = 32,
-    train_lr = 8e-5,
-    train_num_steps = 700000,         # total training steps
-    gradient_accumulate_every = 2,    # gradient accumulation steps
-    ema_decay = 0.995,                # exponential moving average decay
-    amp = True,                       # turn on mixed precision
-    calculate_fid = True              # whether to calculate fid during training
-)
+(This is important because $t$ usually goes up to $1000$, and for every iteration during training, we need to calculate a new $x_t$.)
 
-trainer.train()
-```
+## Reverse Process
 
-Samples and model checkpoints will be logged to `./results` periodically
+First step in the reversing process, What we are calculating? how?
 
-## Multi-GPU Training
+By bayes rule, we have:
 
-The `Trainer` class is now equipped with <a href="https://huggingface.co/docs/accelerate/accelerator">🤗 Accelerator</a>. You can easily do multi-gpu training in two steps using their `accelerate` CLI
+$$q(x_{t - 1}|x_{t}) = q(x_{t}|x_{t - 1}) \frac{q(x_{t - 1})}{q(x_{t})}$$
 
-At the project root directory, where the training script is, run
+However, we don't know $q(x_{t - 1}), q(x_{t})$ out of thin air. Instead, we know they are derived from $x_0$, thus we have:
 
-```python
-$ accelerate config
-```
+$$q(x_{t - 1}|x_{t}, x_0) = q(x_{t}|x_{t - 1}, x_0) \frac{q(x_{t - 1}|x_0)}{q(x_{t}|x_0)}$$
 
-Then, in the same directory
+Each term on the right hand side can be calculated as follows:
 
-```python
-$ accelerate launch train.py
-```
+$$\begin{aligned}
+q(x_{t - 1}|x_0) &= \sqrt{\bar \alpha_{t - 1}} x_{0} + \sqrt{1 - \bar\alpha_{t - 1}} z &&\sim \mathcal{N}(\sqrt{\bar \alpha_{t - 1}} x_{0}, 1 - \bar\alpha_{t - 1}) \\
+q(x_{t}|x_0) &= \sqrt{\bar \alpha_{t}} x_{0} + \sqrt{1 - \bar\alpha_{t}} z  &&\sim \mathcal{N}(\sqrt{\bar \alpha_{t}} x_{0}, 1 - \bar\alpha_{t}) \\
+q(x_{t}|x_{t - 1}, x_0) &= \sqrt{\alpha_t} x_{t - 1} + \sqrt{1 - \alpha_t} z  &&\sim \mathcal{N}(\sqrt{\alpha_t} x_{t - 1}, 1 - \alpha_t) \\
+\end{aligned}$$
 
-## Miscellaneous
+Prior knowledge:
 
-### 1D Sequence
+$$\mathcal{N}(\mu, \sigma) = \frac{1}{\sigma \sqrt{2\pi} } e^{-\frac{1}{2}\left(\frac{x-\mu}{\sigma}\right)^2}$$
 
-By popular request, a 1D Unet + Gaussian Diffusion implementation. You will have to do the training code yourself
+**(Heavy Math)** Lets simplify the equation. We want to find the distribution of the first timestamp in the reverse process, $q(x_{t - 1}|x_{t})$:
 
-```python
-import torch
-from denoising_diffusion_pytorch import Unet1D, GaussianDiffusion1D
+$$\begin{aligned}
+&\propto exp\left(-\frac{1}{2}\left(\frac{(x_t - \sqrt{\alpha_t} x_{t - 1})^2}{1 - \alpha_t} + \frac{(x_{t - 1} - \sqrt{\bar \alpha_{t - 1}} x_{0})^2}{1 - \bar\alpha_{t - 1}} - \frac{(x_{t} - \sqrt{\bar \alpha_{t}} x_{0})^2}{1 - \bar\alpha_{t}}\right)\right) \\
+&= exp\left(-\frac{1}{2}\left(\frac{x_t^2 - 2\sqrt{\alpha_t} x_t\mathbin{\color{blue}{x_{t - 1}}} + \alpha_t \color{red}{x_{t - 1}^2}}{1 - \alpha_t} + \frac{\mathbin{\color{red}{x_{t - 1}^2}} - 2\sqrt{\bar \alpha_{t - 1}}\mathbin{\color{blue}{x_{t - 1}}}x_{0} + \bar\alpha_{t - 1}x_{0}^2}{1 - \bar\alpha_{t - 1}} - \frac{x_{t}^2 - \sqrt{\bar \alpha_{t}}x_{t}x_{0} + \bar \alpha_{t}x_{0}^2}{1 - \bar\alpha_{t}}\right)\right) \\
+&= exp\left(-\frac{1}{2}\left(\mathbin{\color{red}{\left(\frac{\alpha_t}{1 - \alpha_t} + \frac{1}{1 - \bar\alpha_{t - 1}}\right) x_{t - 1}^2}} - \mathbin{\color{blue}{\left(\frac{2\sqrt{\alpha_t}}{1 - \alpha_t}x_{t} + \frac{2\sqrt{\bar \alpha_{t - 1}}}{1 - \bar\alpha_{t - 1}}x_{0}\right) x_{t - 1}}} - \frac{x_t^2}{1 - \alpha_t} + \frac{\bar\alpha_{t - 1}x_{0}^2}{1 - \bar\alpha_{t - 1}} - \frac{x_{t}^2 - \sqrt{\bar \alpha_{t}}x_{t}x_{0} + \bar \alpha_{t}x_{0}^2}{1 - \bar\alpha_{t}}\right)\right) \\
+&= exp\left(-\frac{1}{2}\left(\mathbin{\color{red}{\left(\frac{\alpha_t}{1 - \alpha_t} + \frac{1}{1 - \bar\alpha_{t - 1}}\right) x_{t - 1}^2}} - \mathbin{\color{blue}{\left(\frac{2\sqrt{\alpha_t}}{1 - \alpha_t}x_{t} + \frac{2\sqrt{\bar \alpha_{t - 1}}}{1 - \bar\alpha_{t - 1}}x_{0}\right) x_{t - 1}}} + C(x_t, x_0)\right)\right) \\
+\end{aligned}$$
 
-model = Unet1D(
-    dim = 64,
-    dim_mults = (1, 2, 4, 8),
-    channels = 32
-)
+The expanded formula is:
 
-diffusion = GaussianDiffusion1D(
-    model,
-    seq_length = 128,
-    timesteps = 1000,
-    objective = 'pred_v'
-)
+$$exp\left(-\frac{1}{2}\left(\frac{x-\mu}{\sigma}\right)^2\right) = exp\left(-\frac{1}{2}\left(\mathbin{\color{red}{\frac{1}{\sigma^2} x^2}} - \mathbin{\color{blue}{\frac{2\mu}{\sigma^2}x}} + \frac{\mu^2}{\sigma^2}\right)\right)$$
 
-training_seq = torch.rand(8, 32, 128) # features are normalized from 0 to 1
-loss = diffusion(training_seq)
-loss.backward()
+Apparently, we know $\sigma_t^2$ already. Lets rearrange to get $\mu$:
 
-# after a lot of training
+$$\mu_t(x_t, x_0) = \frac{\sqrt{\alpha_t}(1 - \bar\alpha_{t - 1})}{1 - \bar\alpha_{t}}x_t + \frac{\sqrt{\bar\alpha_{t - 1}}(1 - \alpha_t)}{1 - \bar\alpha_{t}}x_0$$
 
-sampled_seq = diffusion.sample(batch_size = 4)
-sampled_seq.shape # (4, 32, 128)
-```
+We don't know $x_0$, it is the final result we are looking for during the reverse process. However, we can rearrange previous equation to get $x_0$:
 
-## Citations
+$$x_{0} = \frac{1}{\sqrt{\bar \alpha_t}}(x_{t} - \sqrt{1 - \bar\alpha_t} z)$$
 
-```bibtex
-@inproceedings{NEURIPS2020_4c5bcfec,
-    author      = {Ho, Jonathan and Jain, Ajay and Abbeel, Pieter},
-    booktitle   = {Advances in Neural Information Processing Systems},
-    editor      = {H. Larochelle and M. Ranzato and R. Hadsell and M.F. Balcan and H. Lin},
-    pages       = {6840--6851},
-    publisher   = {Curran Associates, Inc.},
-    title       = {Denoising Diffusion Probabilistic Models},
-    url         = {https://proceedings.neurips.cc/paper/2020/file/4c5bcfec8584af0d967f1ab10179ca4b-Paper.pdf},
-    volume      = {33},
-    year        = {2020}
-}
-```
+Finally:
 
-```bibtex
-@InProceedings{pmlr-v139-nichol21a,
-    title       = {Improved Denoising Diffusion Probabilistic Models},
-    author      = {Nichol, Alexander Quinn and Dhariwal, Prafulla},
-    booktitle   = {Proceedings of the 38th International Conference on Machine Learning},
-    pages       = {8162--8171},
-    year        = {2021},
-    editor      = {Meila, Marina and Zhang, Tong},
-    volume      = {139},
-    series      = {Proceedings of Machine Learning Research},
-    month       = {18--24 Jul},
-    publisher   = {PMLR},
-    pdf         = {http://proceedings.mlr.press/v139/nichol21a/nichol21a.pdf},
-    url         = {https://proceedings.mlr.press/v139/nichol21a.html},
-}
-```
+$$\begin{aligned}
+\mu_t &= \frac{\sqrt{\alpha_t}(1 - \bar\alpha_{t - 1})}{1 - \bar\alpha_{t}}x_t + \frac{\sqrt{\bar\alpha_{t - 1}}(1 - \alpha_t)}{1 - \bar\alpha_{t}}\frac{1}{\sqrt{\bar \alpha_t}}(x_{t} - \sqrt{1 - \bar\alpha_t} z) \\
+&= \frac{\alpha_t - \bar\alpha_{t}}{\sqrt{\alpha_t}(1 - \bar\alpha_{t})}x_t + \frac{1 - \alpha_t}{\sqrt{\alpha_t}(1 - \bar\alpha_{t})}(x_{t} - \sqrt{1 - \bar\alpha_t} z) \\
+&= \frac{\alpha_t  - \alpha_t + (1 - \bar\alpha_{t})}{\sqrt{\alpha_t}(1 - \bar\alpha_{t})}x_t - \frac{1 - \alpha_t}{\sqrt{\alpha_t}\sqrt{1 - \bar\alpha_t}}z \\
+&= \frac{1}{\sqrt{\alpha_t}} \left(x_t - \frac{1 - \alpha_t}{\sqrt{1 - \bar\alpha_t}}z \right) \\
+\end{aligned}$$
 
-```bibtex
-@inproceedings{kingma2021on,
-    title       = {On Density Estimation with Diffusion Models},
-    author      = {Diederik P Kingma and Tim Salimans and Ben Poole and Jonathan Ho},
-    booktitle   = {Advances in Neural Information Processing Systems},
-    editor      = {A. Beygelzimer and Y. Dauphin and P. Liang and J. Wortman Vaughan},
-    year        = {2021},
-    url         = {https://openreview.net/forum?id=2LdBqxc1Yv}
-}
-```
+**$z$ is the noise $\in \mathcal{N}(0, 1)$ which we don't know, and it is the thing we want to predict. The task of Diffusion Denoising Probabilistic Model is to train a model (UNet $f_\theta$) to predict $z$ given $x_t$.**
 
-```bibtex
-@article{Karras2022ElucidatingTD,
-    title   = {Elucidating the Design Space of Diffusion-Based Generative Models},
-    author  = {Tero Karras and Miika Aittala and Timo Aila and Samuli Laine},
-    journal = {ArXiv},
-    year    = {2022},
-    volume  = {abs/2206.00364}
-}
-```
+### Summarize
 
-```bibtex
-@article{Song2021DenoisingDI,
-    title   = {Denoising Diffusion Implicit Models},
-    author  = {Jiaming Song and Chenlin Meng and Stefano Ermon},
-    journal = {ArXiv},
-    year    = {2021},
-    volume  = {abs/2010.02502}
-}
-```
+We iteratively "reverse the noise" as following to get $x_0$:
 
-```bibtex
-@misc{chen2022analog,
-    title   = {Analog Bits: Generating Discrete Data using Diffusion Models with Self-Conditioning},
-    author  = {Ting Chen and Ruixiang Zhang and Geoffrey Hinton},
-    year    = {2022},
-    eprint  = {2208.04202},
-    archivePrefix = {arXiv},
-    primaryClass = {cs.CV}
-}
-```
+$$\begin{aligned}
+q(x_{t - 1}|x_{t}) \sim \mathcal{N}(\mu_t, \sigma_t^2) &= \mu_t + \sigma_t z \\
+&= \frac{1}{\sqrt{\alpha_t}} \left(x_t - \frac{1 - \alpha_t}{\sqrt{1 - \bar\alpha_t}}f_\theta(x_t, t) \right) + \sigma_t z\\
+\end{aligned}$$
 
-```bibtex
-@article{Qiao2019WeightS,
-    title   = {Weight Standardization},
-    author  = {Siyuan Qiao and Huiyu Wang and Chenxi Liu and Wei Shen and Alan Loddon Yuille},
-    journal = {ArXiv},
-    year    = {2019},
-    volume  = {abs/1903.10520}
-}
-```
+Technically, this process is reversing the noise. However, it is indeed a **generative process**. Thats why it is generally known as **Diffusion Generative Model**.
 
-```bibtex
-@article{Salimans2022ProgressiveDF,
-    title   = {Progressive Distillation for Fast Sampling of Diffusion Models},
-    author  = {Tim Salimans and Jonathan Ho},
-    journal = {ArXiv},
-    year    = {2022},
-    volume  = {abs/2202.00512}
-}
-```
+## Algorithm
 
-```bibtex
-@article{Ho2022ClassifierFreeDG,
-    title   = {Classifier-Free Diffusion Guidance},
-    author  = {Jonathan Ho},
-    journal = {ArXiv},
-    year    = {2022},
-    volume  = {abs/2207.12598}
-}
-```
+### DDPM
 
-```bibtex
-@article{Sunkara2022NoMS,
-    title   = {No More Strided Convolutions or Pooling: A New CNN Building Block for Low-Resolution Images and Small Objects},
-    author  = {Raja Sunkara and Tie Luo},
-    journal = {ArXiv},
-    year    = {2022},
-    volume  = {abs/2208.03641}
-}
-```
+![DDPM](image/DDPM.png)
 
-```bibtex
-@inproceedings{Jabri2022ScalableAC,
-    title   = {Scalable Adaptive Computation for Iterative Generation},
-    author  = {A. Jabri and David J. Fleet and Ting Chen},
-    year    = {2022}
-}
-```
+### SR3
 
-```bibtex
-@article{Cheng2022DPMSolverPlusPlus,
-    title   = {DPM-Solver++: Fast Solver for Guided Sampling of Diffusion Probabilistic Models},
-    author  = {Cheng Lu and Yuhao Zhou and Fan Bao and Jianfei Chen and Chongxuan Li and Jun Zhu},
-    journal = {NeuRips 2022 Oral},
-    year    = {2022},
-    volume  = {abs/2211.01095}
-}
-```
+![SR3](image/SR3.png)
 
-```bibtex
-@inproceedings{Hoogeboom2023simpleDE,
-    title   = {simple diffusion: End-to-end diffusion for high resolution images},
-    author  = {Emiel Hoogeboom and Jonathan Heek and Tim Salimans},
-    year    = {2023}
-}
-```
+### The Core Model
 
-```bibtex
-@misc{https://doi.org/10.48550/arxiv.2302.01327,
-    doi     = {10.48550/ARXIV.2302.01327},
-    url     = {https://arxiv.org/abs/2302.01327},
-    author  = {Kumar, Manoj and Dehghani, Mostafa and Houlsby, Neil},
-    title   = {Dual PatchNorm},
-    publisher = {arXiv},
-    year    = {2023},
-    copyright = {Creative Commons Attribution 4.0 International}
-}
-```
+![UNet](image/UNet.jpeg)
 
-```bibtex
-@inproceedings{Hang2023EfficientDT,
-    title   = {Efficient Diffusion Training via Min-SNR Weighting Strategy},
-    author  = {Tiankai Hang and Shuyang Gu and Chen Li and Jianmin Bao and Dong Chen and Han Hu and Xin Geng and Baining Guo},
-    year    = {2023}
-}
-```
+We modify this model to make it more suitable for our task.
+
+![Design](<image/design.png>)
+
+### Example
+![demo](image/demo.gif)
+
+
+### CryoEM Super Resolution
+
+## In construction
+![init](<image/cryocopy.png>)
+
+![cryo](image/cryo.png)
+
