@@ -4,7 +4,7 @@
 
 ## Forward Process
 
-Firstly, we define a ratio:
+We start by defining a ratio:
 
 $$\beta_t \in (0, 1)$$
 
@@ -79,6 +79,9 @@ $$\mathcal{N}(\mu, \sigma) = \frac{1}{\sigma \sqrt{2\pi} } e^{-\frac{1}{2}\left(
 $$\begin{aligned}
 &\propto exp\left(-\frac{1}{2}\left(\frac{(x_t - \sqrt{\alpha_t} x_{t - 1})^2}{1 - \alpha_t} + \frac{(x_{t - 1} - \sqrt{\bar \alpha_{t - 1}} x_{0})^2}{1 - \bar\alpha_{t - 1}} - \frac{(x_{t} - \sqrt{\bar \alpha_{t}} x_{0})^2}{1 - \bar\alpha_{t}}\right)\right) \\
 &= exp\left(-\frac{1}{2}\left(\frac{x_t^2 - 2\sqrt{\alpha_t} x_t\mathbin{\color{blue}{x_{t - 1}}} + \alpha_t \color{red}{x_{t - 1}^2}}{1 - \alpha_t} + \frac{\mathbin{\color{red}{x_{t - 1}^2}} - 2\sqrt{\bar \alpha_{t - 1}}\mathbin{\color{blue}{x_{t - 1}}}x_{0} + \bar\alpha_{t - 1}x_{0}^2}{1 - \bar\alpha_{t - 1}} - \frac{x_{t}^2 - \sqrt{\bar \alpha_{t}}x_{t}x_{0} + \bar \alpha_{t}x_{0}^2}{1 - \bar\alpha_{t}}\right)\right) \\
+\end{aligned}$$
+
+$$\begin{aligned}
 &= exp\left(-\frac{1}{2}\left(\mathbin{\color{red}{\left(\frac{\alpha_t}{1 - \alpha_t} + \frac{1}{1 - \bar\alpha_{t - 1}}\right) x_{t - 1}^2}} - \mathbin{\color{blue}{\left(\frac{2\sqrt{\alpha_t}}{1 - \alpha_t}x_{t} + \frac{2\sqrt{\bar \alpha_{t - 1}}}{1 - \bar\alpha_{t - 1}}x_{0}\right) x_{t - 1}}} - \frac{x_t^2}{1 - \alpha_t} + \frac{\bar\alpha_{t - 1}x_{0}^2}{1 - \bar\alpha_{t - 1}} - \frac{x_{t}^2 - \sqrt{\bar \alpha_{t}}x_{t}x_{0} + \bar \alpha_{t}x_{0}^2}{1 - \bar\alpha_{t}}\right)\right) \\
 &= exp\left(-\frac{1}{2}\left(\mathbin{\color{red}{\left(\frac{\alpha_t}{1 - \alpha_t} + \frac{1}{1 - \bar\alpha_{t - 1}}\right) x_{t - 1}^2}} - \mathbin{\color{blue}{\left(\frac{2\sqrt{\alpha_t}}{1 - \alpha_t}x_{t} + \frac{2\sqrt{\bar \alpha_{t - 1}}}{1 - \bar\alpha_{t - 1}}x_{0}\right) x_{t - 1}}} + C(x_t, x_0)\right)\right) \\
 \end{aligned}$$
