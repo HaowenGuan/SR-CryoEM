@@ -2,6 +2,7 @@ import math
 from inspect import isfunction
 from functools import partial
 
+import h5py
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 from einops import rearrange
@@ -13,15 +14,15 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 from torch.optim import Adam
-from prepare_data import simulate_new, simulate_on_grid, CryoEMDataset
+from prepare_data import simulate_new, simulate_on_grid, CryoEMDataset, normalize_map
 from util.map_splitter import split_map, reconstruct_map
-from util.normalize import normalize_map
 from pathlib import Path
 from util.density_map import DensityMap
 import tempfile
 import os
 import shutil
 import wandb
+from torch.cuda.amp import GradScaler, autocast
 
 
 def exists(x):
@@ -220,7 +221,6 @@ class Unet(nn.Module):
             out_dim=None,
             dim_mults=(1, 2, 4, 8),
             channels=3,
-            with_time_emb=True,
             resnet_block_groups=8,
             use_convnext=True,
             convnext_mult=2,
@@ -230,7 +230,7 @@ class Unet(nn.Module):
         # determine dimensions
         self.channels = channels
 
-        init_dim = default(init_dim, dim // 3 * 2)
+        init_dim = default(init_dim, dim)
         self.init_conv = nn.Conv3d(channels * 2, init_dim, 7, padding=3)
 
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
@@ -423,9 +423,9 @@ def p_losses(model, x, y, t, in_resolution, out_resolution, noise=None, loss_typ
 
 def get_model(args):
     model = Unet(
-        dim=args.image_size,
+        dim=args.hide_dim,
         channels=args.channels,
-        dim_mults=(1, 2, 4,)
+        dim_mults=(1, 2, 4, 8)
     )
     if args.load:
         model.load_state_dict(torch.load("model/model_1.pth"))
@@ -436,94 +436,78 @@ def get_model(args):
     return model
 
 
-def get_dataset(args):
-    if os.path.isfile("/data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt"):
-        dataset = torch.load("/data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt")
-    else:
-        in_map_list = list()
-        out_map_list = list()
-        in_label = list()
-        out_label = list()
-
-        # Adding simulated data
-        pdb = '/data/sbcaesar/Mac-SR-CryoEM/dataset/5fj6.pdb'
-        for in_res in np.arange(4.0, 10.0, 0.4):
-            in_map = simulate_new(pdb, in_res, 1)
-            in_map = normalize_map(in_map)
-            in_data = split_map(in_map.data)
-            tmp_dir = tempfile.mkdtemp(prefix='deeptracer_preprocessing')
-            tmp_map_path = os.path.join(tmp_dir, 'in.mrc')
-            in_map.save(tmp_map_path)
-            for out_res in np.arange(2.5, in_res, 0.5):
-                out_map = simulate_on_grid(pdb, out_res, tmp_map_path)
-                out_map = normalize_map(out_map)
-                out_data = split_map(out_map.data)
-                in_map_list += in_data
-                out_map_list += out_data
-                in_label.append(torch.full((len(in_data),), in_res))
-                out_label.append(torch.full((len(out_data),), out_res))
-            shutil.rmtree(tmp_dir)
-
-        # Adding real data
-        in_res = 8.0
-        tmp_map_path = '/data/sbcaesar/Mac-SR-CryoEM/dataset/emd_3186.map'
-        in_map = DensityMap.open(tmp_map_path)
-        in_map = normalize_map(in_map)
-        in_data = split_map(in_map.data)
-        for out_res in np.arange(2.5, in_res, 0.5):
-            out_map = simulate_on_grid(pdb, out_res, tmp_map_path)
-            out_map = normalize_map(out_map)
-            out_data = split_map(out_map.data)
-            in_map_list += in_data
-            out_map_list += out_data
-            in_label.append(torch.full((len(in_data),), in_res))
-            out_label.append(torch.full((len(out_data),), out_res))
-
-        dataset = CryoEMDataset(in_map_list, out_map_list, torch.cat(in_label, 0), torch.cat(out_label, 0))
-        torch.save(dataset, "/data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt")
-        print("Saved dataset to /data/sbcaesar/Mac-SR-CryoEM/dataset/3186_dataset.pt")
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
-    return dataloader
-
-def train(args, model, dataloader):
+def train(args, model, trainloader, valloader=None):
+    scaler = GradScaler()
     optimizer = Adam(model.parameters(), lr=args.lr)
-    i = 0
+    it = 0
+    best_val_loss = float('inf')
     for epoch in range(args.epochs):
-        for step, batch in enumerate(dataloader):
-            i += 1
+        for in_batch, in_resolution, out_batch, out_resolution in tqdm(trainloader):
+            it += 1
             optimizer.zero_grad()
+            batch_size = len(in_batch)
+            with autocast():
+                in_batch = in_batch.to(args.device)
+                in_resolution = in_resolution.to(args.device)
+                out_batch = out_batch.to(args.device)
+                out_resolution = out_resolution.to(args.device)
 
-            batch_size = len(batch[0])
-            in_batch = batch[0].to(args.device)
-            in_resolution = batch[1].to(args.device)
-            out_batch = batch[2].to(args.device)
-            out_resolution = batch[3].to(args.device)
+                # Algorithm 1 line 3: sample t uniformly for every example in the batch
+                t_tensor = torch.randint(0, timesteps, (batch_size,), device=args.device)
 
-            # Algorithm 1 line 3: sample t uniformly for every example in the batch
-            t_tensor = torch.randint(0, timesteps, (batch_size,), device=args.device).long()
+                loss = p_losses(
+                    model,
+                    in_batch.float(),
+                    out_batch.float(),
+                    t_tensor,
+                    in_resolution,
+                    out_resolution,
+                    loss_type="huber"
+                )
 
-            loss = p_losses(
-                model,
-                in_batch.float(),
-                out_batch.float(),
-                t_tensor,
-                in_resolution,
-                out_resolution,
-                loss_type="huber"
-            )
+            wandb.log({"Train_Loss": loss.item(), 'epoch': epoch}, step=it)
 
-            if step % 10 == 0:
-                print("Epoch:", epoch, "Loss:", loss.item())
-                wandb.log({"Loss": loss.item()}, step=i)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
-            loss.backward()
-            optimizer.step()
+        if valloader is not None:
+            total_loss = 0
+            n = 0
+            for in_batch, in_resolution, out_batch, out_resolution in tqdm(valloader):
+                it += 1
+                optimizer.zero_grad()
+                batch_size = len(in_batch)
+                n += batch_size
+                with autocast():
+                    in_batch = in_batch.to(args.device)
+                    in_resolution = in_resolution.to(args.device)
+                    out_batch = out_batch.to(args.device)
+                    out_resolution = out_resolution.to(args.device)
+                    t_tensor = torch.randint(0, timesteps, (batch_size,), device=args.device).long()
 
-        if isinstance(model, nn.DataParallel):
-            torch.save(model.module.state_dict(), args.model_path.format(epoch))
-        else:
-            torch.save(model.state_dict(), args.model_path.format(epoch))
-        print("Model saved to", args.model_path.format(epoch))
+                    loss = p_losses(
+                        model,
+                        in_batch,
+                        out_batch,
+                        t_tensor,
+                        in_resolution,
+                        out_resolution,
+                        loss_type="huber"
+                    )
+                    total_loss += loss.item() * batch_size
+
+                val_loss = total_loss / n
+                wandb.log({"Validation_Loss": val_loss}, step=it)
+
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
+                    torch.save(weights, args.model_path.format(f'_dim_{args.hide_dim}_best'))
+
+            if args.save_last_model:
+                weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
+                torch.save(weights, args.model_path.format(f'_dim_{args.hide_dim}_best'))
 
 
 @torch.no_grad()
@@ -584,12 +568,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--image_size', type=int, default=64, help='image size')
     parser.add_argument('--core_size', type=int, default=50, help='core size')
+    parser.add_argument('--hide_dim', type=int, default=128, help='batch size')
     parser.add_argument('--channels', type=int, default=1, help='channels')
-    parser.add_argument('--batch_size', type=int, default=16, help='batch size')
-    parser.add_argument('--lr', type=float, default=1e-5, help='learning rate')
+    parser.add_argument('--batch_size', type=int, default=18, help='batch size')
+    parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--epochs', type=int, default=200, help='epochs')
+    parser.add_argument('--dataset_dir', type=str, default='/data/sbcaesar/SR_CryoEM_Dataset')
     parser.add_argument('--load', action='store_true', help='load model')
     parser.add_argument('--model_path', type=str, default='model/model_{}.pth', help='model path')
+    parser.add_argument('--save_last_model', action='store_true', default=True)
     parser.add_argument('--device', type=str, default='cuda', help='device')
     parser.add_argument('--multi_gpu', default=True, action='store_true', help='muti_gpu')
     parser.add_argument('--train', action='store_true', help='train')
@@ -605,17 +592,27 @@ if __name__ == "__main__":
     model = get_model(args)
 
     if args.train:
-        wandb.init(sync_tensorboard=False,
-                   project="Diffusion-Super-Resolution",
-                   job_type="CleanRepo",
+        WANDB_RUN_NAME = f'lr_{args.lr}_batch_size_{args.batch_size}_hide_dim_{args.hide_dim}'
+        wandb.init(project='SR_CryoEM', name=WANDB_RUN_NAME, config=args, sync_tensorboard=False)
+
+        wandb.init(project="SR_CryoEM",
+                   job_type="train",
                    config=args,
+                   save_code=True,
                    )
         print("Super Resolution Training Starting...")
         if args.load:
             print("Loaded model from", args.model_path)
         print("Training LR:", args.lr)
-        dataloader = get_dataset(args)
-        train(args, model, dataloader)
+
+        hdf5 = h5py.File(os.path.join(args.dataset_dir, 'SR_CryoEM_Dataset.hdf5'), 'r')
+        
+        train_set = CryoEMDataset(hdf5['train'])
+        trainloader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
+        val_set = CryoEMDataset(hdf5['val'])
+        valloader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True)
+
+        train(args, model, trainloader, valloader)
 
     if args.predict:
         print("Super Resolution Inference Starting...")

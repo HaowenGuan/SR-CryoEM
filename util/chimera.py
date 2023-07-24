@@ -6,15 +6,16 @@ import os
 class Chimera:
 
     @staticmethod
-    def run(tmp_dir: str, commands: List[str]):
+    def run(tmp_dir: str, commands: List[str], debug=False):
         """
         Runs list of chimera commands
 
-        :param tmp_dir: Output directory where chimera script is temporarily
-        saved
+        :param tmp_dir: Output directory where chimera script is temporarily saved
         :param commands: List of chimera commands
+        :param debug: If true, print commands to stdout
         """
-        print('\n'.join(commands))
+        if debug:
+            print('\n'.join(commands))
         # Create script and save to file system
         with open(os.path.join(tmp_dir, 'chimera_script.cmd'), 'w') as fp:
             fp.write('\n'.join(commands))
