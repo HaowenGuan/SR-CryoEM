@@ -1,3 +1,4 @@
+import gc
 import math
 from inspect import isfunction
 from functools import partial
@@ -23,6 +24,9 @@ import os
 import shutil
 import wandb
 from torch.cuda.amp import GradScaler, autocast
+import random
+from transformers import get_cosine_schedule_with_warmup, get_polynomial_decay_schedule_with_warmup
+
 
 
 def exists(x):
@@ -420,6 +424,14 @@ def p_losses(model, x, y, t, in_resolution, out_resolution, noise=None, loss_typ
 
     return loss
 
+def set_seeds(seed):
+    """Sets all seeds and disables non-deset_seedsterminism in cuDNN backend."""
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(seed)
+    random.seed(seed)
 
 def get_model(args):
     model = Unet(
@@ -428,7 +440,8 @@ def get_model(args):
         dim_mults=(1, 2, 4, 8)
     )
     if args.load:
-        model.load_state_dict(torch.load("model/model_1.pth"))
+        model.load_state_dict(torch.load("model/model__dim_128_1.pth"))
+        print("Loaded model from", "model/model__dim_128_1.pth")
     if args.multi_gpu and torch.cuda.device_count() > 1:
         print("Using", torch.cuda.device_count(), "GPUs!")
         model = nn.DataParallel(model)
@@ -436,14 +449,29 @@ def get_model(args):
     return model
 
 
+def gc_collect():
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
 def train(args, model, trainloader, valloader=None):
     scaler = GradScaler()
     optimizer = Adam(model.parameters(), lr=args.lr)
+    scheduler = get_polynomial_decay_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=0,
+        num_training_steps=10520,
+        lr_end=args.lr * 0.5,
+    )
     it = 0
+    best_train_loss = float('inf')
     best_val_loss = float('inf')
+    saving = False
     for epoch in range(args.epochs):
         for in_batch, in_resolution, out_batch, out_resolution in tqdm(trainloader):
             it += 1
+            if it < (epoch * 10520) + 1000:
+                continue
             optimizer.zero_grad()
             batch_size = len(in_batch)
             with autocast():
@@ -465,12 +493,22 @@ def train(args, model, trainloader, valloader=None):
                     loss_type="huber"
                 )
 
-            wandb.log({"Train_Loss": loss.item(), 'epoch': epoch}, step=it)
+            wandb.log({"Train_Loss": loss.item(), 'epoch': epoch, 'lr': scheduler.get_last_lr()[0]}, step=it)
+            if loss.item() < best_train_loss:
+                best_train_loss = loss.item()
+                saving = True
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+            scheduler.step()
 
+            if it % 1000 == 0 and saving:
+                weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
+                torch.save(weights, args.model_path.format(f'_dim_{args.hide_dim}_{it // 1000}'))
+                saving = False
+
+        optimizer.zero_grad()
         if valloader is not None:
             total_loss = 0
             n = 0
@@ -497,17 +535,18 @@ def train(args, model, trainloader, valloader=None):
                     )
                     total_loss += loss.item() * batch_size
 
-                val_loss = total_loss / n
-                wandb.log({"Validation_Loss": val_loss}, step=it)
+            val_loss = total_loss / n
+            wandb.log({"Validation_Loss": val_loss}, step=it)
+                # wandb.log({'Reconstructed_Pixels': wandb.Histogram(torch.nan_to_num(image_save.detach().cpu()))}, step=it)
 
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
-                    torch.save(weights, args.model_path.format(f'_dim_{args.hide_dim}_best'))
-
-            if args.save_last_model:
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
                 weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
                 torch.save(weights, args.model_path.format(f'_dim_{args.hide_dim}_best'))
+
+        if args.save_last_model:
+            weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
+            torch.save(weights, args.model_path.format(f'_dim_{args.hide_dim}_last'))
 
 
 @torch.no_grad()
@@ -584,10 +623,13 @@ if __name__ == "__main__":
     parser.add_argument('--input_path', type=str, default='dataset/sim7.mrc', help='input path')
     parser.add_argument('--input_resolution', type=float, default=7.0, help='input resolution')
     parser.add_argument('--output_resolution', type=float, default=3.0, help='output resolution')
+    parser.add_argument('--seed', type=int, default=0, help='random seed')
     args = parser.parse_args()
 
     if args.device == 'cuda':
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    set_seeds(args.seed)
 
     model = get_model(args)
 
@@ -601,8 +643,6 @@ if __name__ == "__main__":
                    save_code=True,
                    )
         print("Super Resolution Training Starting...")
-        if args.load:
-            print("Loaded model from", args.model_path)
         print("Training LR:", args.lr)
 
         hdf5 = h5py.File(os.path.join(args.dataset_dir, 'SR_CryoEM_Dataset.hdf5'), 'r')
