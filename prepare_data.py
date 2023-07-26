@@ -246,7 +246,7 @@ def add_simulated_data(pdb_path, hdf5, split=None):
 
 
 def add_real_data(map_path, pdb_path, resolution, hdf5, split=None):
-    emd = map_path.split('/')[-1]
+    emd = map_path.split('/')[-2]
     print(f'Processing {emd} with resolution {resolution}...')
     if split is None:
         split = {'train': 0.8, 'val': 0.1, 'test': 0.1}
@@ -255,6 +255,9 @@ def add_real_data(map_path, pdb_path, resolution, hdf5, split=None):
     in_label = list()
     out_label = list()
     in_map = DensityMap.open(map_path)
+    contour = get_contour_level(emd)
+    print(f'Get contour level: {contour}')
+    in_map = resample(in_map, voxel_size=1.0, contour=contour)
     in_map = normalize_map(in_map)
     in_data = split_map(in_map.data)
     tmp_dir = tempfile.mkdtemp(prefix='deeptracer_preprocessing')
@@ -364,7 +367,7 @@ def similarity(density_map_path: str, solved_structure_path: str, output_dir: st
     X.data[X.data < 0] = 0
     X.data /= map_max
     X.data[X.data > 1] = 1
-    X = resample(X, voxelSize=1.0)
+    X = resample(X, voxel_size=1.0)
 
     tmp_dir = tempfile.mkdtemp(prefix='deeptracer_preprocessing')
     tmp_map_path = os.path.join(tmp_dir, 'temp.mrc')
@@ -474,5 +477,4 @@ if __name__ == '__main__':
     # remove_trimmed_data(args.dataset_path)
     # create_hdf5(args.dataset_path, args.cubic_size)
     # construct_dataset(args.dataset_path)
-
 

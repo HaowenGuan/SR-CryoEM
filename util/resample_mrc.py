@@ -7,8 +7,7 @@ import time
 import mrcfile
 
 
-def resample_mrc(input_filename: str, output_filename: str, voxelSize=0.5,
-                 DeepTracer=True, dimension_spec=None):
+def resample_mrc(input_filename: str, output_filename: str, voxel_size=0.5, contour=None, dimension_spec=None):
     """
     Crops density map to area with high density values and reSamples map on grid
     with voxel size of 0.5.  Algorithm is based on triLinear interpolation, detail
@@ -17,12 +16,12 @@ def resample_mrc(input_filename: str, output_filename: str, voxelSize=0.5,
 
     :param input_filename: Input directory of map file
     :param output_filename: Output directory of map file
-    :param (optional) voxelSize: ReSampling voxel size (Note: 0.5 will only reSample the top 1% value's 3D space)
-    :param (optional) DeepTracer: Using DeepTracer standard for 0.5 voxel size reSample task (default True)
+    :param (optional) voxel_size: ReSampling voxel size (Note: 0.5 will only reSample the top 1% value's 3D space)
+    :param (optional) contour: contour level
     :param (optional) dimension_spec: A python list of box dimension in [x_ori, y_ori, z_ori, x_size, y_size, z_size]
     """
 
-    print('Re-sampling density map on new grid with voxel size %s' % voxelSize)
+    print('Re-sampling density map on new grid with voxel size %s' % voxel_size)
     with mrcfile.open(input_filename) as mrc:
         data = deepcopy(mrc.data)
         v = deepcopy(mrc.voxel_size)
@@ -36,17 +35,15 @@ def resample_mrc(input_filename: str, output_filename: str, voxelSize=0.5,
     old_oz = origin.z + nzstart * v.z
 
     if dimension_spec is None:
-        # If using DeepTracer standard. Only keep area of map which contains the highest 1% of values
-        if voxelSize == 0.5 and DeepTracer:
+        if contour:
             temp_data = deepcopy(data)
-            threshold = np.percentile(temp_data, 99.0)
-            temp_data[temp_data < threshold] = 0
+            temp_data[temp_data < contour] = 0
             k_list, j_list, i_list = [sorted(i) for i in np.nonzero(temp_data)]
 
             # New dimensions before reSampling
-            width = (int((i_list[-1] - i_list[0]) * v.x) + 10) * 2
-            height = (int((j_list[-1] - j_list[0]) * v.y) + 10) * 2
-            depth = (int((k_list[-1] - k_list[0]) * v.z) + 10) * 2
+            width = int(((i_list[-1] - i_list[0]) * v.x + 10) / voxel_size)
+            height = int(((j_list[-1] - j_list[0]) * v.y + 10) / voxel_size)
+            depth = int(((k_list[-1] - k_list[0]) * v.z + 10) / voxel_size)
 
             # New origin
             new_ox = old_ox + (i_list[0] * v.x) - 5
@@ -57,16 +54,16 @@ def resample_mrc(input_filename: str, output_filename: str, voxelSize=0.5,
             del temp_data, i_list, j_list, k_list
         else:
             new_ox, new_oy, new_oz = old_ox, old_oy, old_oz
-            width = math.floor((data.shape[2] * v.x) / voxelSize)
-            height = math.floor((data.shape[1] * v.y) / voxelSize)
-            depth = math.floor((data.shape[0] * v.z) / voxelSize)
+            width = math.floor((data.shape[2] * v.x) / voxel_size)
+            height = math.floor((data.shape[1] * v.y) / voxel_size)
+            depth = math.floor((data.shape[0] * v.z) / voxel_size)
     else:
         new_ox, new_oy, new_oz, width, height, depth = dimension_spec
 
     # Adjust the reSampling dimensions and origin if it is go beyond the original shape
-    new_ox, width = adjust_dim(old_ox, new_ox, data.shape[2], width, v.x, voxelSize)
-    new_oy, height = adjust_dim(old_oy, new_oy, data.shape[1], height, v.y, voxelSize)
-    new_oz, depth = adjust_dim(old_oz, new_oz, data.shape[0], depth, v.z, voxelSize)
+    new_ox, width = adjust_dim(old_ox, new_ox, data.shape[2], width, v.x, voxel_size)
+    new_oy, height = adjust_dim(old_oy, new_oy, data.shape[1], height, v.y, voxel_size)
+    new_oz, depth = adjust_dim(old_oz, new_oz, data.shape[0], depth, v.z, voxel_size)
 
     #  Try to create an array to resample the map onto
     try:
@@ -91,9 +88,9 @@ def resample_mrc(input_filename: str, output_filename: str, voxelSize=0.5,
     # Pre-recording axis information
     # xx, yy, zz records the corresponding index of each voxel in the original density map
     # x_d, y_d, z_d records the remainder to each corresponding index (refer z_d, y_d, x_d in triLinear interpolation)
-    xx, x_d = axis_info(old_ox, new_ox, width, v.x, voxelSize)
-    yy, y_d = axis_info(old_oy, new_oy, height, v.y, voxelSize)
-    zz, z_d = axis_info(old_oz, new_oz, depth, v.z, voxelSize)
+    xx, x_d = axis_info(old_ox, new_ox, width, v.x, voxel_size)
+    yy, y_d = axis_info(old_oy, new_oy, height, v.y, voxel_size)
+    zz, z_d = axis_info(old_oz, new_oz, depth, v.z, voxel_size)
     x_d = x_d.reshape((1, 1, width))
     y_d = y_d.reshape((1, height, 1))
     z_d = z_d.reshape((depth, 1, 1))
@@ -104,7 +101,7 @@ def resample_mrc(input_filename: str, output_filename: str, voxelSize=0.5,
     # every value in the original density map will be used at least once, so using optimized method
     # is faster since it assumes every value will be used at least once, vice-versa.
     meanVoxelSize = (v.x + v.y + v.z) / 3
-    if meanVoxelSize > voxelSize / 2:
+    if meanVoxelSize > voxel_size / 2:
         # Pre-calculate z direction index tuple used for array querying
         data = data[zz[0]:zz[-1] + 2, yy[0]:yy[-1] + 2, xx[0]:xx[-1] + 2]
         zz, yy, xx = zz - zz[0], yy - yy[0], xx - xx[0]
@@ -163,7 +160,7 @@ def resample_mrc(input_filename: str, output_filename: str, voxelSize=0.5,
         mrc.header.nxstart, mrc.header.nystart, mrc.header.nzstart = 0, 0, 0
         mrc.header.origin = np.array((new_ox, new_oy, new_oz),
                                      dtype=[('x', '<f4'), ('y', '<f4'), ('z', '<f4')]).view(np.recarray)
-        mrc.voxel_size = np.array((voxelSize, voxelSize, voxelSize),
+        mrc.voxel_size = np.array((voxel_size, voxel_size, voxel_size),
                                   dtype=[('x', '<f4'), ('y', '<f4'), ('z', '<f4')]).view(np.recarray)
         print('Size of new map is (%d, %d, %d)' % resampledData.shape)
         mrc.update_header_stats()

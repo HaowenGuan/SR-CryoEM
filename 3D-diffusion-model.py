@@ -26,6 +26,8 @@ import wandb
 from torch.cuda.amp import GradScaler, autocast
 import random
 from transformers import get_cosine_schedule_with_warmup, get_polynomial_decay_schedule_with_warmup
+from util.resample import resample
+from torch.optim.lr_scheduler import MultiplicativeLR
 
 
 
@@ -405,7 +407,7 @@ def q_sample(y, t, noise=None):
     return sqrt_alphas_cumprod_t * y + sqrt_one_minus_alphas_cumprod_t * noise
 
 
-def p_losses(model, x, y, t, in_resolution, out_resolution, noise=None, loss_type="l1"):
+def p_losses(model, x, y, t, in_resolution, out_resolution, noise=None, loss_type="l1", reduction="mean"):
     if noise is None:
         noise = torch.randn_like(y)
 
@@ -414,11 +416,11 @@ def p_losses(model, x, y, t, in_resolution, out_resolution, noise=None, loss_typ
     predicted_noise = model(x_y_noisy, t, in_resolution, out_resolution)
 
     if loss_type == 'l1':
-        loss = F.l1_loss(noise, predicted_noise)
+        loss = F.l1_loss(noise, predicted_noise, reduction=reduction)
     elif loss_type == 'l2':
-        loss = F.mse_loss(noise, predicted_noise)
+        loss = F.mse_loss(noise, predicted_noise, reduction=reduction)
     elif loss_type == "huber":
-        loss = F.smooth_l1_loss(noise, predicted_noise)
+        loss = F.smooth_l1_loss(noise, predicted_noise, reduction=reduction)
     else:
         raise NotImplementedError()
 
@@ -440,8 +442,9 @@ def get_model(args):
         dim_mults=(1, 2, 4, 8)
     )
     if args.load:
-        model.load_state_dict(torch.load("model/model__dim_128_1.pth"))
-        print("Loaded model from", "model/model__dim_128_1.pth")
+        path = os.path.join(args.model_dir, args.load)
+        model.load_state_dict(torch.load(path))
+        print("Loaded model from", path)
     if args.multi_gpu and torch.cuda.device_count() > 1:
         print("Using", torch.cuda.device_count(), "GPUs!")
         model = nn.DataParallel(model)
@@ -457,21 +460,16 @@ def gc_collect():
 def train(args, model, trainloader, valloader=None):
     scaler = GradScaler()
     optimizer = Adam(model.parameters(), lr=args.lr)
-    scheduler = get_polynomial_decay_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=0,
-        num_training_steps=10520,
-        lr_end=args.lr * 0.5,
-    )
+    # Decrease learning rate by half every epoch
+    decay = 0.5 ** (1 / 3743)
+    scheduler = MultiplicativeLR(optimizer, lr_lambda=lambda x: decay)
     it = 0
     best_train_loss = float('inf')
     best_val_loss = float('inf')
     saving = False
     for epoch in range(args.epochs):
-        for in_batch, in_resolution, out_batch, out_resolution in tqdm(trainloader):
+        for in_batch, in_resolution, out_batch, out_resolution in tqdm(trainloader, desc ="Train"):
             it += 1
-            if it < (epoch * 10520) + 1000:
-                continue
             optimizer.zero_grad()
             batch_size = len(in_batch)
             with autocast():
@@ -505,18 +503,16 @@ def train(args, model, trainloader, valloader=None):
 
             if it % 1000 == 0 and saving:
                 weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
-                torch.save(weights, args.model_path.format(f'_dim_{args.hide_dim}_{it // 1000}'))
+                torch.save(weights, os.path.join(args.model_dir, f'model_dim_{args.hide_dim}_{it // 1000}.pth'))
                 saving = False
 
         optimizer.zero_grad()
         if valloader is not None:
-            total_loss = 0
-            n = 0
-            for in_batch, in_resolution, out_batch, out_resolution in tqdm(valloader):
+            total_loss = []
+            for in_batch, in_resolution, out_batch, out_resolution in tqdm(valloader, desc ="Validation"):
                 it += 1
                 optimizer.zero_grad()
                 batch_size = len(in_batch)
-                n += batch_size
                 with autocast():
                     in_batch = in_batch.to(args.device)
                     in_resolution = in_resolution.to(args.device)
@@ -531,22 +527,23 @@ def train(args, model, trainloader, valloader=None):
                         t_tensor,
                         in_resolution,
                         out_resolution,
-                        loss_type="huber"
+                        loss_type="huber",
+                        reduction="none"
                     )
-                    total_loss += loss.item() * batch_size
-
-            val_loss = total_loss / n
+                    loss = torch.mean(loss, (1, 2, 3, 4))
+                    total_loss += list(loss.detach().cpu())
+            val_loss = sum(total_loss) / len(total_loss)
             wandb.log({"Validation_Loss": val_loss}, step=it)
-                # wandb.log({'Reconstructed_Pixels': wandb.Histogram(torch.nan_to_num(image_save.detach().cpu()))}, step=it)
+            wandb.log({'Validation_Loss_histogram': wandb.Histogram(total_loss)}, step=it)
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
-                torch.save(weights, args.model_path.format(f'_dim_{args.hide_dim}_best'))
+                torch.save(weights, os.path.join(args.model_dir, f'model_dim_{args.hide_dim}_best.pth'))
 
         if args.save_last_model:
             weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
-            torch.save(weights, args.model_path.format(f'_dim_{args.hide_dim}_last'))
+            torch.save(weights, os.path.join(args.model_dir, f'model_dim_{args.hide_dim}_last.pth'))
 
 
 @torch.no_grad()
@@ -577,8 +574,8 @@ def p_sample_loop(args, model, in_batch):
     # start from pure noise (for each example in the batch)
     x = torch.randn(in_batch.shape, device=args.device).float()
     # imgs = []
-    in_resolution = torch.full((b,), args.input_resolution, device=args.device, dtype=torch.long)
-    out_resolution = torch.full((b,), args.output_resolution, device=args.device, dtype=torch.long)
+    in_resolution = torch.full((b,), args.input_resolution, device=args.device, dtype=torch.float)
+    out_resolution = torch.full((b,), args.output_resolution, device=args.device, dtype=torch.float)
 
     for t in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
         t_tensor = torch.full((b,), t, device=args.device, dtype=torch.long)
@@ -591,9 +588,9 @@ def p_sample_loop(args, model, in_batch):
 def predict(args, model, density_map):
     in_map = np.stack(split_map(density_map.data, box_size=args.image_size, core_size=args.core_size))
     out_map = []
-    for i in range(0, len(in_map), args.batch_size):
+    for i in range(0, -(-len(in_map) // args.batch_size)):
         print("Batch:", i + 1, "Total:", -(-len(in_map) // args.batch_size))
-        in_map_batch = torch.from_numpy(in_map[i:i + args.batch_size]).to(args.device)
+        in_map_batch = torch.from_numpy(in_map[(i * args.batch_size):((i + 1) * args.batch_size)]).to(args.device)
         out_map_batch = p_sample_loop(args, model, in_map_batch.float())
         for out_map_i in out_map_batch:
             out_map.append(out_map_i[0].detach().cpu().numpy())
@@ -613,15 +610,15 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--epochs', type=int, default=200, help='epochs')
     parser.add_argument('--dataset_dir', type=str, default='/data/sbcaesar/SR_CryoEM_Dataset')
-    parser.add_argument('--load', action='store_true', help='load model')
-    parser.add_argument('--model_path', type=str, default='model/model_{}.pth', help='model path')
+    parser.add_argument('--load', type=str, default='model__dim_128_best.pth', help='load model name')
+    parser.add_argument('--model_dir', type=str, default='model', help='model dir')
     parser.add_argument('--save_last_model', action='store_true', default=True)
     parser.add_argument('--device', type=str, default='cuda', help='device')
     parser.add_argument('--multi_gpu', default=True, action='store_true', help='muti_gpu')
     parser.add_argument('--train', action='store_true', help='train')
     parser.add_argument('--predict', action='store_true', help='predict')
-    parser.add_argument('--input_path', type=str, default='dataset/sim7.mrc', help='input path')
-    parser.add_argument('--input_resolution', type=float, default=7.0, help='input resolution')
+    parser.add_argument('--input_path', type=str, default='dataset/emd_3186.map', help='input path')
+    parser.add_argument('--input_resolution', type=float, default=7.9, help='input resolution')
     parser.add_argument('--output_resolution', type=float, default=3.0, help='output resolution')
     parser.add_argument('--seed', type=int, default=0, help='random seed')
     args = parser.parse_args()
@@ -635,13 +632,7 @@ if __name__ == "__main__":
 
     if args.train:
         WANDB_RUN_NAME = f'lr_{args.lr}_batch_size_{args.batch_size}_hide_dim_{args.hide_dim}'
-        wandb.init(project='SR_CryoEM', name=WANDB_RUN_NAME, config=args, sync_tensorboard=False)
-
-        wandb.init(project="SR_CryoEM",
-                   job_type="train",
-                   config=args,
-                   save_code=True,
-                   )
+        wandb.init(project='SR_CryoEM', name=WANDB_RUN_NAME, config=args, save_code=True)
         print("Super Resolution Training Starting...")
         print("Training LR:", args.lr)
 
@@ -660,7 +651,9 @@ if __name__ == "__main__":
         assert args.input_resolution > args.output_resolution, "Input resolution must be larger than output resolution"
         print("Super resolution from", args.input_resolution, "to", args.output_resolution)
         density_map = DensityMap.open(args.input_path)
+        density_map = resample(density_map, voxel_size=1.0)
+        density_map = normalize_map(density_map)
         predict(args, model, density_map)
-        output_path = 'dataset/emd_3186_predict_{}.mrc'.format(args.output_resolution)
+        output_path = args.input_path[:-4] + f'_sr_{args.output_resolution}.mrc'
         density_map.save(output_path)
-        print(output_path)
+        print("Output map path:", output_path)
