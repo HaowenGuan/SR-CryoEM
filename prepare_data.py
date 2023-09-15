@@ -104,11 +104,9 @@ def normalize_map(density_map: DensityMap) -> DensityMap:
     Normalizes the density values of the density map
     :param density_map: Input density map
     """
-    density_map.data[density_map.data < 0] = 0
-    percentile = np.percentile(density_map.data[np.nonzero(density_map.data)], 99.9)
-    density_map.data /= percentile
-    density_map.data[density_map.data > 1] = 1
-
+    mean = np.mean(density_map.data)
+    std = np.std(density_map.data)
+    density_map.data = (density_map.data - mean) / std
     return density_map
 
 
@@ -249,7 +247,7 @@ def add_real_data(map_path, pdb_path, resolution, hdf5, split=None):
     emd = map_path.split('/')[-2]
     print(f'Processing {emd} with resolution {resolution}...')
     if split is None:
-        split = {'train': 0.8, 'val': 0.1, 'test': 0.1}
+        split = {'train': 1.0, 'val': 0.0, 'test': 0.0}
     in_map_list = list()
     out_map_list = list()
     in_label = list()
@@ -263,7 +261,8 @@ def add_real_data(map_path, pdb_path, resolution, hdf5, split=None):
     tmp_dir = tempfile.mkdtemp(prefix='deeptracer_preprocessing')
     tmp_map_path = os.path.join(tmp_dir, 'in.mrc')
     in_map.save(tmp_map_path)
-    for out_res in range(1, int(resolution)):
+    # for out_res in range(1, int(resolution)):
+    for out_res in range(3, 4):
         out_map = simulate_on_grid(pdb_path, out_res, tmp_map_path)
         out_map = normalize_map(out_map)
         out_data = split_map(out_map.data)
@@ -443,9 +442,12 @@ def construct_dataset(dataset_dir: str, output_dir=None):
         output_dir = dataset_dir
 
     train_stats = os.path.join(output_dir, 'Training_dataset_stats_qscore_trimmed.csv')
-    resolutions = dict()
-    for i, row in pd.read_csv(train_stats).iterrows():
-        resolutions[row['EMD']] = float(row['Resolution'])
+    if os.path.isfile(train_stats):
+        resolutions = dict()
+        for i, row in pd.read_csv(train_stats).iterrows():
+            resolutions[row['EMD']] = float(row['Resolution'])
+    else:
+        resolutions = None
     hdf5 = h5py.File(os.path.join(dataset_dir, 'SR_CryoEM_Dataset.hdf5'), 'a')
 
     it = 0
@@ -457,17 +459,17 @@ def construct_dataset(dataset_dir: str, output_dir=None):
         input_files = os.listdir(map_dir)
         mrc_files = [f for f in input_files if f[:3] in ['emd']]
         pdb_files = [f for f in input_files if f[-3:] in ['pdb', 'ent']]
-        add_real_data(os.path.join(map_dir, mrc_files[0]), os.path.join(map_dir, pdb_files[0]), resolutions[emd_name], hdf5)
+        r = get_resolution(emd_name) if resolutions == None else resolutions[emd_name]
+        add_real_data(os.path.join(map_dir, mrc_files[0]), os.path.join(map_dir, pdb_files[0]), r, hdf5)
     hdf5.close()
     print('Dataset construction finished.')
     print('Added %s density map.' % it)
     print('Dataset size: %s' % os.path.getsize(os.path.join(dataset_dir, 'SR_CryoEM_Dataset.hdf5')))
 
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_path', type=str, default='/data/sbcaesar/SR_CryoEM_Dataset')
+    parser.add_argument('--dataset_path', type=str, default='/data/sbcaesar/SR-CryoEM-testset')
     parser.add_argument('--redo_preprocessing', action='store_true', default=True)
     parser.add_argument('--cubic_size', type=int, default=64)
     args = parser.parse_args()
@@ -475,6 +477,6 @@ if __name__ == '__main__':
     # examine_dataset(args.dataset_path, redo=args.redo_preprocessing)
     # trim_data(args.dataset_path)
     # remove_trimmed_data(args.dataset_path)
-    # create_hdf5(args.dataset_path, args.cubic_size)
-    # construct_dataset(args.dataset_path)
+    create_hdf5(args.dataset_path, args.cubic_size)
+    construct_dataset(args.dataset_path)
 

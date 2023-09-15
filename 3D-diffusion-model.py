@@ -28,6 +28,7 @@ import random
 from transformers import get_cosine_schedule_with_warmup, get_polynomial_decay_schedule_with_warmup
 from util.resample import resample
 from torch.optim.lr_scheduler import MultiplicativeLR
+import json
 
 
 
@@ -371,7 +372,7 @@ def sigmoid_beta_schedule(timesteps):
     return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
 
 
-timesteps = 200
+timesteps = 1000
 
 # define beta schedule
 betas = linear_beta_schedule(timesteps=timesteps)
@@ -379,6 +380,7 @@ betas = linear_beta_schedule(timesteps=timesteps)
 # define alphas
 alphas = 1. - betas
 alphas_cumprod = torch.cumprod(alphas, axis=0)
+print(timesteps, ":", alphas_cumprod)
 alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
 sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
 
@@ -460,14 +462,16 @@ def gc_collect():
 def train(args, model, trainloader, valloader=None):
     scaler = GradScaler()
     optimizer = Adam(model.parameters(), lr=args.lr)
-    # Decrease learning rate by half every epoch
-    decay = 0.5 ** (1 / 3743)
+    # Decrease learning rate by x time for every epoch
+    multi = 1 / 2
+    decay = multi**(1 / 500)
+    # decay = 1.0
     scheduler = MultiplicativeLR(optimizer, lr_lambda=lambda x: decay)
     it = 0
     best_train_loss = float('inf')
     best_val_loss = float('inf')
     saving = False
-    for epoch in range(args.epochs):
+    for epoch in range(1, args.epochs):
         for in_batch, in_resolution, out_batch, out_resolution in tqdm(trainloader, desc ="Train"):
             it += 1
             optimizer.zero_grad()
@@ -479,7 +483,7 @@ def train(args, model, trainloader, valloader=None):
                 out_resolution = out_resolution.to(args.device)
 
                 # Algorithm 1 line 3: sample t uniformly for every example in the batch
-                t_tensor = torch.randint(0, timesteps, (batch_size,), device=args.device)
+                t_tensor = torch.randint(0, timesteps, (batch_size,), device=args.device).long()
 
                 loss = p_losses(
                     model,
@@ -510,7 +514,6 @@ def train(args, model, trainloader, valloader=None):
         if valloader is not None:
             total_loss = []
             for in_batch, in_resolution, out_batch, out_resolution in tqdm(valloader, desc ="Validation"):
-                it += 1
                 optimizer.zero_grad()
                 batch_size = len(in_batch)
                 with autocast():
@@ -541,7 +544,7 @@ def train(args, model, trainloader, valloader=None):
                 weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
                 torch.save(weights, os.path.join(args.model_dir, f'model_dim_{args.hide_dim}_best.pth'))
 
-        if args.save_last_model:
+        if args.save_last_model and epoch % 1000 == 0:
             weights = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
             torch.save(weights, os.path.join(args.model_dir, f'model_dim_{args.hide_dim}_last.pth'))
 
@@ -604,24 +607,25 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--image_size', type=int, default=64, help='image size')
     parser.add_argument('--core_size', type=int, default=50, help='core size')
-    parser.add_argument('--hide_dim', type=int, default=128, help='batch size')
+    parser.add_argument('--hide_dim', type=int, default=64, help='batch size')
     parser.add_argument('--channels', type=int, default=1, help='channels')
     parser.add_argument('--batch_size', type=int, default=18, help='batch size')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
-    parser.add_argument('--epochs', type=int, default=200, help='epochs')
-    parser.add_argument('--dataset_dir', type=str, default='/data/sbcaesar/SR_CryoEM_Dataset')
-    parser.add_argument('--load', type=str, default='model__dim_128_best.pth', help='load model name')
+    parser.add_argument('--epochs', type=int, default=1000, help='epochs')
+    parser.add_argument('--dataset_dir', type=str, default='/data/sbcaesar/SR-CryoEM-testset')
+    parser.add_argument('--load', type=str, help='load model name')
     parser.add_argument('--model_dir', type=str, default='model', help='model dir')
     parser.add_argument('--save_last_model', action='store_true', default=True)
     parser.add_argument('--device', type=str, default='cuda', help='device')
-    parser.add_argument('--multi_gpu', default=True, action='store_true', help='muti_gpu')
+    parser.add_argument('--multi_gpu', action='store_true', help='muti_gpu')
     parser.add_argument('--train', action='store_true', help='train')
     parser.add_argument('--predict', action='store_true', help='predict')
-    parser.add_argument('--input_path', type=str, default='dataset/emd_3186.map', help='input path')
-    parser.add_argument('--input_resolution', type=float, default=7.9, help='input resolution')
+    parser.add_argument('--input_path', type=str, default='/data/sbcaesar/SR-CryoEM-testset/EMD-4054/emd_4054.map', help='input path')
+    parser.add_argument('--input_resolution', type=float, default=5.9, help='input resolution')
     parser.add_argument('--output_resolution', type=float, default=3.0, help='output resolution')
-    parser.add_argument('--seed', type=int, default=0, help='random seed')
+    parser.add_argument('--seed', type=int, default=100, help='random seed')
     args = parser.parse_args()
+    args.input_path = '/data/sbcaesar/SR-CryoEM-testset/EMD-22287/emd_22287.map'
 
     if args.device == 'cuda':
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -629,10 +633,13 @@ if __name__ == "__main__":
     set_seeds(args.seed)
 
     model = get_model(args)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Number of parameters: {total_params}")
 
     if args.train:
+        master_name = 'continue small dataset with lr decay'
         WANDB_RUN_NAME = f'lr_{args.lr}_batch_size_{args.batch_size}_hide_dim_{args.hide_dim}'
-        wandb.init(project='SR_CryoEM', name=WANDB_RUN_NAME, config=args, save_code=True)
+        wandb.init(project='SR_CryoEM', name=master_name + WANDB_RUN_NAME, config=args, save_code=True)
         print("Super Resolution Training Starting...")
         print("Training LR:", args.lr)
 
@@ -640,10 +647,10 @@ if __name__ == "__main__":
         
         train_set = CryoEMDataset(hdf5['train'])
         trainloader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
-        val_set = CryoEMDataset(hdf5['val'])
-        valloader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True)
+        # val_set = CryoEMDataset(hdf5['val'])
+        # valloader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True)
 
-        train(args, model, trainloader, valloader)
+        train(args, model, trainloader)
 
     if args.predict:
         print("Super Resolution Inference Starting...")
@@ -651,9 +658,11 @@ if __name__ == "__main__":
         assert args.input_resolution > args.output_resolution, "Input resolution must be larger than output resolution"
         print("Super resolution from", args.input_resolution, "to", args.output_resolution)
         density_map = DensityMap.open(args.input_path)
-        density_map = resample(density_map, voxel_size=1.0)
+        density_map = resample(density_map, voxel_size=1.0, contour=0.01)
         density_map = normalize_map(density_map)
-        predict(args, model, density_map)
+        density_map = predict(args, model, density_map)
+        percentile = np.percentile(density_map.data[np.nonzero(density_map.data)], 0.1)
+        density_map.data += percentile
         output_path = args.input_path[:-4] + f'_sr_{args.output_resolution}.mrc'
         density_map.save(output_path)
         print("Output map path:", output_path)
