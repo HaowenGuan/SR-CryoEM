@@ -6,8 +6,9 @@ matplotlib
 mrcfile
 numpy
 Pillow
-Pillow
 pytorch_fid
 torch
 torchvision
 tqdm
+taming-transformers
+lightning
