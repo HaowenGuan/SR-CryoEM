@@ -14,7 +14,7 @@ setup(
   long_description_content_type = 'text/markdown',
   keywords = [
     'artificial intelligence',
-    'generative models'
+    'generative modules'
   ],
   install_requires=[
     'accelerate',

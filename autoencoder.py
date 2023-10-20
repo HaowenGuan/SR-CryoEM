@@ -53,6 +53,8 @@ class AutoencoderKL3D(pl.LightningModule):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
 
+        # self.automatic_optimization = False
+
     def init_from_ckpt(self, path, ignore_keys=list()):
         sd = torch.load(path, map_location="cpu")["state_dict"]
         keys = list(sd.keys())
@@ -110,8 +112,9 @@ class AutoencoderKL3D(pl.LightningModule):
         x = x.permute(0, 3, 1, 2).to(memory_format=torch.contiguous_format).float()
         return x
 
-    def training_step(self, batch, batch_idx, optimizer_idx):
-        inputs = self.get_input(batch, self.image_key)
+    def training_step(self, inputs):
+        optimizer_idx = 0
+        # inputs = self.get_input(batch, self.image_key)
         reconstructions, posterior = self.forward(inputs)
 
         if optimizer_idx == 0:
@@ -152,7 +155,7 @@ class AutoencoderKL3D(pl.LightningModule):
         return self.log_dict
 
     def configure_optimizers(self):
-        lr = self.learning_rate
+        lr = 0.0001
         ae_params_list = list(self.encoder.parameters()) + list(self.decoder.parameters()) + list(
             self.quant_conv.parameters()) + list(self.post_quant_conv.parameters())
         if self.learn_logvar:
@@ -162,7 +165,7 @@ class AutoencoderKL3D(pl.LightningModule):
                                   lr=lr, betas=(0.5, 0.9))
         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
                                     lr=lr, betas=(0.5, 0.9))
-        return [opt_ae, opt_disc], []
+        return [opt_ae], []
 
     def get_last_layer(self):
         return self.decoder.conv_out.weight
@@ -223,7 +226,7 @@ class IdentityFirstStage(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    # TODO: Continue to rewrite this code, and the models in model/models.py to 3D models
+    # TODO: Continue to rewrite this code, and the modules in model/modules.py to 3D modules
     # TODO: Write the data pipeline for Autoencoder
     import yaml
     import os
@@ -232,7 +235,7 @@ if __name__ == "__main__":
         config = yaml.safe_load(file)
     print(config)
 
-    autoencoder = AutoencoderKL3D(config.model.params)
+    autoencoder = AutoencoderKL3D(**config['model']['params'])
     from autoencoder_data_preprocessing import AutoencoderDataset
     import h5py
     import argparse
@@ -241,30 +244,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_dir', type=str, default='/data/sbcaesar/SR-CryoEM-testset')
     args = parser.parse_args()
-    hdf5 = h5py.File(os.path.join(args.dataset_dir, 'SR_CryoEM_Dataset.hdf5'), 'r')
+    hdf5 = h5py.File(os.path.join(args.dataset_dir, 'SR_CryoEM_Autoencoder_Dataset.hdf5'), 'r')
     train_set = AutoencoderDataset(hdf5['train'])
 
+    from torch.utils.data import DataLoader
+    from pytorch_lightning import Trainer
+    from pytorch_lightning.callbacks import ModelCheckpoint
+
     # Setting up the Dataloader
-    train_loader = DataLoader(train_set, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_set, batch_size=8, shuffle=True, num_workers=4, pin_memory=True)
 
-    # Setting up the Trainer
-    trainer = pl.Trainer(
-        max_epochs=100,  # Example number of epochs
-        gpus=1,  # Assuming you are training on 1 GPU
-        logger=pl.loggers.TensorBoardLogger("logs/"),  # Log to TensorBoard (optional)
-        checkpoint_callback=pl.callbacks.ModelCheckpoint(
-            dirpath="checkpoints/",
-            save_top_k=1,
-            verbose=True,
-            monitor="val_loss",  # Assuming you have a validation loss you wish to monitor
-            mode="min",
-        ),
+    # Trainer configuration
+    trainer = Trainer(
+        max_epochs=100,  # Adjust as needed
+        devices=1 if torch.cuda.is_available() else None,  # Train on GPU if available
+        logger=True,
     )
-
-    # Train
+    # Train the model
     trainer.fit(autoencoder, train_loader)
-
-    # Save the final model (optional)
-    torch.save(autoencoder.state_dict(), "final_autoencoder.pth")
 
     pass

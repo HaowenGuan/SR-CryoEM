@@ -59,7 +59,7 @@ def simulate_on_grid(solved_structure_path: str, resolution: float, map_path: st
     return out_map
 
 
-class AutoEncoderDataset(Dataset):
+class AutoencoderDataset(Dataset):
     def __init__(self, hdf5):
         self.cubes = hdf5['cubes']
 
@@ -67,7 +67,7 @@ class AutoEncoderDataset(Dataset):
         return len(self.cubes)
 
     def __getitem__(self, idx):
-        cube = torch.tensor(self.cube[idx])
+        cube = torch.tensor(self.cubes[idx])
         return cube
 
 
