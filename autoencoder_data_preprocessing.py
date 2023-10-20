@@ -59,23 +59,16 @@ def simulate_on_grid(solved_structure_path: str, resolution: float, map_path: st
     return out_map
 
 
-class CryoEMDataset(Dataset):
+class AutoEncoderDataset(Dataset):
     def __init__(self, hdf5):
-        self.in_map = hdf5['in_map']
-        self.out_map = hdf5['out_map']
-        self.in_label = hdf5['in_label']
-        self.out_label = hdf5['out_label']
+        self.cubes = hdf5['cubes']
 
     def __len__(self):
-        assert len(self.in_map) == len(self.in_label) == len(self.out_map) == len(self.out_label)
-        return len(self.in_map)
+        return len(self.cubes)
 
     def __getitem__(self, idx):
-        in_map = torch.tensor(self.in_map[idx])
-        out_map = torch.tensor(self.out_map[idx])
-        in_label = torch.tensor(self.in_label[idx])
-        out_label = torch.tensor(self.out_label[idx])
-        return in_map, in_label, out_map, out_label
+        cube = torch.tensor(self.cube[idx])
+        return cube
 
 
 def normalize_map(density_map: DensityMap) -> DensityMap:
@@ -176,7 +169,9 @@ def add_simulated_data(pdb_path, hdf5, split=None):
     if split is None:
         split = {'train': 0.8, 'val': 0.1, 'test': 0.1}
     cube_list = list()
+    pdb = pdb_path.split('/')[-2]
     for res in range(1, 10):
+        print(f'Generating simulated data for {pdb} at resolution {res}.')
         density_map = simulate_new(pdb_path, res, 1)
         density_map = normalize_map(density_map)
         cubes = split_map(density_map.data)
@@ -186,13 +181,14 @@ def add_simulated_data(pdb_path, hdf5, split=None):
     cube_list = np.array(cube_list)[shuffle]
     prev = 0.0
     for group, ratio in split.items():
+        g = hdf5[group]
         cur = prev + ratio
         start = int(prev * n)
         end = int(cur * n)
         size = end - start
-        ori = hdf5[group]['in_map'].shape[0]
-        hdf5[group]['cubes'].resize(ori + size, axis=0)
-        hdf5[group]['in_map'][-size:] = cube_list[start:end]
+        ori = g['cubes'].shape[0]
+        g['cubes'].resize(ori + size, axis=0)
+        g['cubes'][-size:] = cube_list[start:end]
         prev = cur
 
 
@@ -214,6 +210,8 @@ def add_real_data(map_path, pdb_path, resolution, hdf5, split=None):
     cube_list = np.array(cube_list)[shuffle]
     prev = 0.0
     for group, ratio in split.items():
+        if ratio == 0.0:
+            continue
         g = hdf5[group]
         cur = prev + ratio
         start = int(prev * n)
@@ -263,6 +261,5 @@ if __name__ == '__main__':
     parser.add_argument('--redo_preprocessing', action='store_true', default=True)
     parser.add_argument('--cubic_size', type=int, default=64)
     args = parser.parse_args()
-    print('wtf')
     create_hdf5(args.dataset_path, args.cubic_size)
     construct_dataset(args.dataset_path)

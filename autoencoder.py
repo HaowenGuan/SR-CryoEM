@@ -228,9 +228,43 @@ if __name__ == "__main__":
     import yaml
     import os
     # print the current path
-    print(os.getcwd())
-    with open("SR_CryoEM_Win/configs/autoencoder/autoencoder_kl_32x32x4.yaml", "r") as file:
+    with open("configs/autoencoder/autoencoder_kl_32x32x4.yaml", "r") as file:
         config = yaml.safe_load(file)
     print(config)
+
     autoencoder = AutoencoderKL3D(config.model.params)
+    from autoencoder_data_preprocessing import AutoencoderDataset
+    import h5py
+    import argparse
+    from torch.utils.data import DataLoader
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset_dir', type=str, default='/data/sbcaesar/SR-CryoEM-testset')
+    args = parser.parse_args()
+    hdf5 = h5py.File(os.path.join(args.dataset_dir, 'SR_CryoEM_Dataset.hdf5'), 'r')
+    train_set = AutoencoderDataset(hdf5['train'])
+
+    # Setting up the Dataloader
+    train_loader = DataLoader(train_set, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
+
+    # Setting up the Trainer
+    trainer = pl.Trainer(
+        max_epochs=100,  # Example number of epochs
+        gpus=1,  # Assuming you are training on 1 GPU
+        logger=pl.loggers.TensorBoardLogger("logs/"),  # Log to TensorBoard (optional)
+        checkpoint_callback=pl.callbacks.ModelCheckpoint(
+            dirpath="checkpoints/",
+            save_top_k=1,
+            verbose=True,
+            monitor="val_loss",  # Assuming you have a validation loss you wish to monitor
+            mode="min",
+        ),
+    )
+
+    # Train
+    trainer.fit(autoencoder, train_loader)
+
+    # Save the final model (optional)
+    torch.save(autoencoder.state_dict(), "final_autoencoder.pth")
+
     pass
