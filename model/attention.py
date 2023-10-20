@@ -11,10 +11,9 @@ from typing import Optional, Any
 try:
     import xformers
     import xformers.ops
-
-    XFORMERS_IS_AVAILBLE = True
+    XFORMERS_IS_AVAILABLE = True
 except:
-    XFORMERS_IS_AVAILBLE = False
+    XFORMERS_IS_AVAILABLE = False
 
 # CrossAttn precision handling
 import os
@@ -254,7 +253,7 @@ class BasicTransformerBlock(nn.Module):
     def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True,
                  disable_self_attn=False):
         super().__init__()
-        attn_mode = "softmax-xformers" if XFORMERS_IS_AVAILBLE else "softmax"
+        attn_mode = "softmax-xformers" if XFORMERS_IS_AVAILABLE else "softmax"
         assert attn_mode in self.ATTENTION_MODES
         attn_cls = self.ATTENTION_MODES[attn_mode]
         self.disable_self_attn = disable_self_attn

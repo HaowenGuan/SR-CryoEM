@@ -10,7 +10,11 @@ from model.utils import instantiate_from_config
 from model.ema import LitEma
 
 
-class AutoencoderKL(pl.LightningModule):
+class AutoencoderKL3D(pl.LightningModule):
+    """
+    Copied from https://github.com/Stability-AI/stablediffusion/blob/main/ldm/models/autoencoder.py
+    Autoencoder with KL loss for 3D data.
+    """
     def __init__(self,
                  ddconfig,
                  lossconfig,
@@ -30,8 +34,8 @@ class AutoencoderKL(pl.LightningModule):
         self.decoder = Decoder(**ddconfig)
         self.loss = instantiate_from_config(lossconfig)
         assert ddconfig["double_z"]
-        self.quant_conv = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
-        self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+        self.quant_conv = torch.nn.Conv3d(2*ddconfig["z_channels"], 2*embed_dim, 1)
+        self.post_quant_conv = torch.nn.Conv3d(embed_dim, ddconfig["z_channels"], 1)
         self.embed_dim = embed_dim
         if colorize_nlabels is not None:
             assert type(colorize_nlabels)==int
