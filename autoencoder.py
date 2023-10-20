@@ -112,7 +112,7 @@ class AutoencoderKL3D(pl.LightningModule):
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         inputs = self.get_input(batch, self.image_key)
-        reconstructions, posterior = self(inputs)
+        reconstructions, posterior = self.forward(inputs)
 
         if optimizer_idx == 0:
             # train encoder+decoder+logvar
@@ -225,4 +225,12 @@ class IdentityFirstStage(torch.nn.Module):
 if __name__ == "__main__":
     # TODO: Continue to rewrite this code, and the models in model/models.py to 3D models
     # TODO: Write the data pipeline for Autoencoder
+    import yaml
+    import os
+    # print the current path
+    print(os.getcwd())
+    with open("SR_CryoEM_Win/configs/autoencoder/autoencoder_kl_32x32x4.yaml", "r") as file:
+        config = yaml.safe_load(file)
+    print(config)
+    autoencoder = AutoencoderKL3D(config.model.params)
     pass
