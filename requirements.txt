@@ -12,3 +12,4 @@ torchvision
 tqdm
 taming-transformers
 lightning
+h5py
