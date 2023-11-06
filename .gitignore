@@ -133,3 +133,13 @@ dmypy.json
 
 # JetBrains
 .idea/
+
+# CryoRes ckpt
+cryores/ckpt/
+
+# Cryo-EM Density Maps and CryoRes Outputs
+*.mrc
+*.map
+
+# .DS_Store
+.DS_Store
