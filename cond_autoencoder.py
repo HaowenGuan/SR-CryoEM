@@ -257,7 +257,8 @@ if __name__ == "__main__":
     # Trainer configuration
     trainer = Trainer(
         max_epochs=100,  # Adjust as needed
-        devices=1 if torch.cuda.is_available() else None,  # Train on GPU if available
+        devices="auto",
+        accelerator="auto",
         logger=True,
     )
     # Train the model
