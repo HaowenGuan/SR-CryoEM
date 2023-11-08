@@ -53,7 +53,7 @@ class Upsample(nn.Module):
         super().__init__()
         self.with_conv = with_conv
         if self.with_conv:
-            self.conv = torch.nn.Conv2d(in_channels,
+            self.conv = torch.nn.Conv3d(in_channels,
                                         in_channels,
                                         kernel_size=3,
                                         stride=1,
