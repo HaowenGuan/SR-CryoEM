@@ -6,10 +6,10 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 from typing import Optional, Any
 
-from ldm.modules.diffusionmodules.util import checkpoint
+from ldm.modules.diffusionmodules.util import checkpoint #TODO: check the function
 
 
-try:
+try: #TODO: decide whether to use xformers or not
     import xformers
     import xformers.ops
     XFORMERS_IS_AVAILBLE = True
@@ -18,7 +18,7 @@ except:
 
 # CrossAttn precision handling
 import os
-_ATTN_PRECISION = os.environ.get("ATTN_PRECISION", "fp32")
+_ATTN_PRECISION = os.environ.get("ATTN_PRECISION", "fp32") #TODO: rewrite
 
 def exists(val):
     return val is not None
@@ -89,7 +89,7 @@ def Normalize(in_channels):
     return torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
 
 
-class SpatialSelfAttention(nn.Module):
+class SpatialSelfAttention(nn.Module): #TODO: 2D to 3D, including Conv layers and shape params b, c, h, w
     def __init__(self, in_channels):
         super().__init__()
         self.in_channels = in_channels
@@ -160,7 +160,7 @@ class CrossAttention(nn.Module):
             nn.Dropout(dropout)
         )
 
-    def forward(self, x, context=None, mask=None):
+    def forward(self, x, context=None, mask=None): #TODO: choose an effective attention function
         h = self.heads
 
         q = self.to_q(x)
