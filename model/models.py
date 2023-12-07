@@ -53,7 +53,7 @@ class Upsample(nn.Module):
         super().__init__()
         self.with_conv = with_conv
         if self.with_conv:
-            self.conv = torch.nn.Conv2d(in_channels,
+            self.conv = torch.nn.Conv3d(in_channels,
                                         in_channels,
                                         kernel_size=3,
                                         stride=1,
@@ -551,6 +551,7 @@ class Encoder(nn.Module):
                                         padding=1)
 
     def forward(self, x):
+        # print("encode x", x.shape)
         # down-sampling
         hs = [self.conv_in(x)]
         for i_level in range(self.num_levels):
@@ -561,6 +562,7 @@ class Encoder(nn.Module):
                 hs.append(h)
             if i_level != self.num_levels - 1:
                 hs.append(self.down[i_level].downsample(hs[-1]))
+            # print(f"Downlevel {i_level}", hs[-1].shape)
 
         # middle
         h = hs[-1]
@@ -652,6 +654,7 @@ class Decoder(nn.Module):
 
     def forward(self, z):
         # z to block_in
+        # print("decode z", z.shape)
         h = self.conv_in(z)
 
         # middle
@@ -667,6 +670,7 @@ class Decoder(nn.Module):
                     h = self.up[i_level].attn[i_block](h)
             if i_level != 0:
                 h = self.up[i_level].upsample(h)
+            # print(f"Uplevel {i_level}", h.shape)
 
         # end
         if self.give_pre_end:
