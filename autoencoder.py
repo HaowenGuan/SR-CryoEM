@@ -32,6 +32,7 @@ class AutoencoderKL3D(pl.LightningModule):
         self.image_key = image_key
         self.encoder = Encoder(**ddconfig)
         self.decoder = Decoder(**ddconfig)
+        # what type of loss function are we using?
         self.loss = instantiate_from_config(lossconfig)
         assert ddconfig["double_z"]
         self.quant_conv = torch.nn.Conv3d(2*ddconfig["z_channels"], 2*embed_dim, 1)
@@ -242,7 +243,7 @@ if __name__ == "__main__":
     from torch.utils.data import DataLoader
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_dir', type=str, default='/data/sbcaesar/SR-CryoEM-testset')
+    parser.add_argument('--dataset_dir', type=str, default='SR_CryoEM_Dataset')
     args = parser.parse_args()
     hdf5 = h5py.File(os.path.join(args.dataset_dir, 'SR_CryoEM_Autoencoder_Dataset.hdf5'), 'r')
     train_set = AutoencoderDataset(hdf5['train'])

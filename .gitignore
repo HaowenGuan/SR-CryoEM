@@ -133,3 +133,7 @@ dmypy.json
 
 # JetBrains
 .idea/
+
+# dataset
+SR_CryoEM_Dataset/
+SR_CryoEM_Dataset_Sample

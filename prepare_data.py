@@ -469,7 +469,7 @@ def construct_dataset(dataset_dir: str, output_dir=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_path', type=str, default='/data/sbcaesar/SR-CryoEM-testset')
+    parser.add_argument('--dataset_path', type=str, default='/data/mattovan/SR-CryoEM/SR_CryoEM_Dataset')
     parser.add_argument('--redo_preprocessing', action='store_true', default=True)
     parser.add_argument('--cubic_size', type=int, default=64)
     args = parser.parse_args()
