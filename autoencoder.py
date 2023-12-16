@@ -231,9 +231,10 @@ if __name__ == "__main__":
     import yaml
     import os
     # print the current path
-    with open("configs/autoencoder/autoencoder_kl_32x32x4.yaml", "r") as file:
+    with open("configs/autoencoder/autoencoder_kl_3D_32x32x4.yaml", "r") as file:
         config = yaml.safe_load(file)
-    print(config)
+    # print(config)
+    print(config['model']['params'])
 
     autoencoder = AutoencoderKL3D(**config['model']['params'])
     from autoencoder_data_preprocessing import AutoencoderDataset
@@ -252,7 +253,7 @@ if __name__ == "__main__":
     from pytorch_lightning.callbacks import ModelCheckpoint
 
     # Setting up the Dataloader
-    train_loader = DataLoader(train_set, batch_size=8, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, num_workers=4, pin_memory=True)
 
     # Trainer configuration
     trainer = Trainer(

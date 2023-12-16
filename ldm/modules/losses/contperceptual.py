@@ -1,15 +1,53 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-from taming.modules.losses.vqperceptual import *  # TODO: taming dependency yes/no?
+from taming.modules.losses.lpips import LPIPS  # TODO: taming dependency yes/no?
+from ldm.modules.discriminator.model import NLayerDiscriminator3D, weights_init
+
+class DummyLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
 
 
-class LPIPSWithDiscriminator(nn.Module):
+def adopt_weight(weight, global_step, threshold=0, value=0.):
+    if global_step < threshold:
+        weight = value
+    return weight
+
+
+def hinge_d_loss(logits_real, logits_fake):
+    loss_real = torch.mean(F.relu(1. - logits_real))
+    loss_fake = torch.mean(F.relu(1. + logits_fake))
+    d_loss = 0.5 * (loss_real + loss_fake)
+    return d_loss
+
+
+def vanilla_d_loss(logits_real, logits_fake):
+    d_loss = 0.5 * (
+        torch.mean(torch.nn.functional.softplus(-logits_real)) +
+        torch.mean(torch.nn.functional.softplus(logits_fake)))
+    return d_loss
+
+class LPIPSWithDiscriminator3D(nn.Module):
     def __init__(self, disc_start, logvar_init=0.0, kl_weight=1.0, pixelloss_weight=1.0,
-                 disc_num_layers=3, disc_in_channels=3, disc_factor=1.0, disc_weight=1.0,
+                 disc_num_layers=3, disc_in_channels=1, disc_factor=1.0, disc_weight=1.0,
                  perceptual_weight=1.0, use_actnorm=False, disc_conditional=False,
                  disc_loss="hinge"):
-
+        """
+        :param disc_start: int, iteration to start using discriminator
+        :param logvar_init: float, initial value for log variance
+        :param kl_weight: float, weight for KL loss
+        :param pixelloss_weight: float, weight for pixel loss
+        :param disc_num_layers: int, number of layers in discriminator
+        :param disc_in_channels: int, number of input channels for discriminator
+        :param disc_factor: float, factor for discriminator loss
+        :param disc_weight: float, weight for discriminator loss
+        :param perceptual_weight: float, weight for perceptual loss
+        :param use_actnorm: bool, whether to use ActNorm in discriminator
+        :param disc_conditional: bool, whether to use conditional discriminator
+        :param disc_loss: str, type of discriminator loss
+        """
         super().__init__()
         assert disc_loss in ["hinge", "vanilla"]
         self.kl_weight = kl_weight
@@ -19,10 +57,10 @@ class LPIPSWithDiscriminator(nn.Module):
         # output log variance
         self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init)
 
-        self.discriminator = NLayerDiscriminator(input_nc=disc_in_channels,
-                                                 n_layers=disc_num_layers,
-                                                 use_actnorm=use_actnorm
-                                                 ).apply(weights_init)
+        self.discriminator = NLayerDiscriminator3D(input_nc=disc_in_channels,
+                                                   n_layers=disc_num_layers,
+                                                   use_actnorm=use_actnorm
+                                                   ).apply(weights_init)
         self.discriminator_iter_start = disc_start
         self.disc_loss = hinge_d_loss if disc_loss == "hinge" else vanilla_d_loss
         self.disc_factor = disc_factor
@@ -45,6 +83,8 @@ class LPIPSWithDiscriminator(nn.Module):
     def forward(self, inputs, reconstructions, posteriors, optimizer_idx,
                 global_step, last_layer=None, cond=None, split="train",
                 weights=None):
+        # print("inputs.shape", inputs.shape)
+        # print("recons.shape", reconstructions.shape)
         rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
         if self.perceptual_weight > 0:
             p_loss = self.perceptual_loss(inputs.contiguous(), reconstructions.contiguous())
